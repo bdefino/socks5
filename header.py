@@ -15,6 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
+import errno
+
 import pack
 
 __doc__ = "header formats"
@@ -26,6 +28,8 @@ class BaseHeader:
     subclasses
     
     this class simply diminishes repeated code
+
+    _addr should be a PACKED IP address OR a domain name
     """
     
     def __init__(self, addr = '', atyp = 3, port = 0, rsv = 0, special = 0,
@@ -36,6 +40,16 @@ class BaseHeader:
         self.rsv = rsv
         self._special = special
         self.ver = ver
+
+    def detect_atyp(self):
+        """set ATYP based on *.ADDR"""
+        self.atyp = 3
+
+        if not '.' in addr:
+            self.atyp = 1
+
+            if len(self.addr) == 8:
+                self.atyp = 4
 
     def fload(self, fp):
         """load from a file-like object"""
@@ -56,13 +70,11 @@ class BaseHeader:
         header = [pack.pack(self.ver, 1), pack.pack(self._special, 1),
             pack.pack(self.rsv, 1), pack.pack(self.atyp, 1)]
 
-        if self.atyp == 1:
-            header.append(pack.pack(self._addr, 4))
-        elif self.atyp == 3:
+        if self.atyp == 3:
             for e in (pack.pack(len(self._addr), 1), self._addr):
                 header.append(e)
-        elif self.atyp == 4:
-            header.append(pack.pack(self._addr, 16))
+        else:
+            header.append(self._addr)
         header.append(pack.pack(self._port, 2))
         return ''.join(header)
 
@@ -106,13 +118,28 @@ class ReplyHeader(BaseHeader):
           o  BND.ADDR       server bound address
           o  BND.PORT       server bound port in network octet order
     """
-
+    ERRNO_TO_REP = {0: 0, errno.EAFNOSUPPORT: 8, errno.ECONNREFUSED: 5,
+        errno.EHOSTUNREACH: 4, errno.ENETUNREACH: 3, errno.ETIMEDOUT: 6}
+    
     def __init__(self, atyp = 3, bnd_addr = '', bnd_port = 0, rep = 0, rsv = 0,
             ver = 5):
         BaseHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
         self.bnd_addr = self._addr
         self.bnd_port = self.port
         self.rep = self._special
+
+    def errno(self, e):########################
+        """
+        set REP based on the error number
+
+        unknown errors are identified as "general SOCKS server failure"
+
+        this doesn't cover "connection not allowed by ruleset"
+        """
+        self.rep = 1
+        
+        if e in ReplyHeader.ERRNO_TO_REP:
+            self.rep = ReplyHeader.ERRNO_TO_REP[e]
 
     def fload(self, fp):
         """load from a file-like object"""

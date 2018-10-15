@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
-__doc__ = "a simple SOCKS5 library"
+__doc__ = "a simple RFC 1928-compliant SOCKS5 library"
 
 import header
 import method
