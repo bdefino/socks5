@@ -25,7 +25,7 @@ class BaseHeader:
     their internal values (_addr, _port, and _special) should be managed by
     subclasses
     
-    this class simply diminishes code reuse
+    this class simply diminishes repeated code
     """
     
     def __init__(self, addr = '', atyp = 3, port = 0, rsv = 0, special = 0,
