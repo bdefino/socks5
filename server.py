@@ -64,7 +64,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
     def __call__(self):#########################
         raise NotImplementedError()
 
-class ConnectRequestHandler(BaseTCPRequestHandler):
+class ConnectRequestHandler(BaseTCPRequestHandler):#######should support TLS
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
