@@ -33,7 +33,7 @@ class BaseHeader:
     _addr should be a PACKED IP address OR a domain name
     """
     
-    def __init__(self, addr = '', atyp = 3, port = 0, rsv = 0, special = 0,
+    def __init__(self, addr = "", atyp = 3, port = 0, rsv = 0, special = 0,
             ver = 5):
         self._addr = addr
         self.atyp = atyp
@@ -77,7 +77,7 @@ class BaseHeader:
         else:
             header.append(self._addr)
         header.append(pack.pack(self._port, 2))
-        return ''.join(header)
+        return "".join(header)
 
     def unpack_addr(self):
         """return the IP address or domain name in *.ADDR"""
@@ -122,7 +122,7 @@ class ReplyHeader(BaseHeader):
     ERRNO_TO_REP = {0: 0, errno.EAFNOSUPPORT: 8, errno.ECONNREFUSED: 5,
         errno.EHOSTUNREACH: 4, errno.ENETUNREACH: 3, errno.ETIMEDOUT: 6}
     
-    def __init__(self, atyp = 3, bnd_addr = '', bnd_port = 0, rep = 0, rsv = 0,
+    def __init__(self, atyp = 3, bnd_addr = "", bnd_port = 0, rep = 0, rsv = 0,
             ver = 5):
         BaseHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
         self.bnd_addr = self._addr
@@ -188,7 +188,7 @@ class RequestHeader(BaseHeader):
              order
     """
     
-    def __init__(self, atyp = 3, cmd = 1, dst_addr = '', dst_port = 0, rsv = 0,
+    def __init__(self, atyp = 3, cmd = 1, dst_addr = "", dst_port = 0, rsv = 0,
             ver = 5):
         BaseHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
         self.cmd = self._special

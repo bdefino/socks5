@@ -46,7 +46,7 @@ class MethodQuery:
     def __str__(self):
         query = [pack.pack(self.version, 1), pack.pack(self.nmethods, 1)] \
             + [pack.pack(m, 1) for m in self.methods]
-        return ''.join(query)
+        return "".join(query)
 
 class MethodResponse:
     """
@@ -67,4 +67,4 @@ class MethodResponse:
         self.method = pack.unpack(fp.read(1))
 
     def __str__(self):
-        return ''.join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))
+        return "".join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))

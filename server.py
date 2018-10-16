@@ -64,7 +64,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
     def __call__(self):#########################
         raise NotImplementedError()
 
-class ConnectRequestHandler(BaseTCPRequestHandler):#######should support TLS
+class ConnectRequestHandler(BaseTCPRequestHandler):
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
@@ -92,9 +92,11 @@ class ConnectRequestHandler(BaseTCPRequestHandler):#######should support TLS
             
             while self.server.alive and _continue:
                 for a, b in ((self.conn, target_conn),
-                        (target_conn, self.conn)): # pipe sockets together
+                        (target_conn, self.conn)): # pipe sockets' I/O together
+                    chunk = ""
+                    
                     try:
-                        chunk = a.recv(4096)
+                        chunk = a.recv(8192)
                     except socket.timeout:
                         pass
                     except socket.error:
@@ -119,8 +121,8 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
         raise NotImplementedError()
 
 class TCPConnectionHandler(BaseHandler):
-    CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
-        3: UDPAssociateRequestHandler}
+    CMD_TO_TCPREQUESTHANDLER = {1: ConnectRequestHandler,
+        2: BindRequestHandler, 3: UDPAssociateRequestHandler}
     
     def __init__(self, conn, remote, *args, **kwargs):
         BaseHandler.__init__(self, *args, **kwargs)
@@ -131,34 +133,36 @@ class TCPConnectionHandler(BaseHandler):
         fp = self.conn.makefile()
         method_query = method.MethodQuery()
         request_header = header.RequestHeader()
+
+        with PRINT_LOCK:
+            print "Handling connection from %s:%u" % self.remote
         
         try:
             method_query.fload(fp)
             self.conn.sendall(str(method.MethodResponse())) # no authentication
             request_header.fload(fp)
             
-            
-            with PRINT_LOCK:
-                print "Handling TCP request from %s:%u for %s:%u" % (
-                    self.remote[0], self.remote[1],
-                    request_header.unpack_addr(), request_header.dst_port)
-            TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](self.conn,
-                self.remote, request_header, self.server)()
+            TCPConnectionHandler.CMD_TO_TCPREQUESTHANDLER[request_header.cmd](
+                self.conn, self.remote, request_header, self.server)()
+        except KeyError: # command not supported
+            self.conn.sendall(str(header.ReplyHeader(rep = 7)))
+        except socket.error:
+            pass
         except IOError as e:#Exception as e
             with PRINT_LOCK:
                 print >> sys.stderr, e
-
-        with PRINT_LOCK:
-            print "Closing TCP connection between %s:%u and %s:%u" % (
+        finally:
+            with PRINT_LOCK:
+                print "Closing connection with %s:%u and %s:%u" % (
                     self.remote[0], self.remote[1],
                     request_header.unpack_addr(), request_header.dst_port)
-        self.conn.close()
+            self.conn.close()
 
 class Server:
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
     def __init__(self, event_handler_class, socket_event_function_name,
-            socket_type, address = ('', 1080), backlog = 10, timeout = 0.1):
+            socket_type, address = ("", 1080), backlog = 10, timeout = 0.1):
         self.address = address
         self.alive = False
         self.backlog = backlog
@@ -191,14 +195,14 @@ class Server:
                 time.sleep(self.sleep)
         except KeyboardInterrupt:
             self.alive = False
-
-        with PRINT_LOCK:
-            print "Shutting down SOCKS5 server..."
-        self._sock.shutdown(socket.SHUT_RDWR)
-        self._sock.close()
+        finally:
+            with PRINT_LOCK:
+                print "Shutting down SOCKS5 server..."
+            self._sock.shutdown(socket.SHUT_RDWR)
+            self._sock.close()
 
 class TCPServer(Server):
-    def __init__(self, address = ('', 1080), backlog = 1, timeout = 0.1):
+    def __init__(self, address = ("", 1080), backlog = 1, timeout = 0.1):
         Server.__init__(self, TCPConnectionHandler, "accept",
             socket.SOCK_STREAM, address, backlog, timeout)
 
@@ -216,7 +220,7 @@ class UDPRequestHandler(BaseHandler):
         raise NotImplementedError()
 
 if __name__ == "__main__":
-    address = ('', 1080)
+    address = ("", 1080)
     backlog = 10
     timeout = 0.1
     TCPServer(address, backlog, timeout).serve_forever()
