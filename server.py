@@ -37,8 +37,18 @@ def server_factory(protocol = socket.getprotobyname("tcp"), *args, **kwargs):
     return {socket.getprotobyname("tcp"): TCPServer,
         socket.getprotobyname("udp"): UDPServer}[protocol](*args, **kwargs)
 
-class BaseTCPRequestHandler:
-    def __init__(self, conn, remote, request_header):
+class BaseHandler:
+    """allows a handler to access the server that (in)directly spawned it"""
+    
+    def __init__(self, server):
+        self.server = server
+
+    def __call__(self):
+        raise NotImplementedError()
+
+class BaseTCPRequestHandler(BaseHandler):
+    def __init__(self, conn, remote, request_header, *args, **kwargs):
+        BaseHandler.__init__(self, *args, **kwargs)
         self.conn = conn
         self.remote = remote
         self.request_header = request_header
@@ -77,8 +87,8 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         if target_conn:
             self.conn.settimeout(0.1)
             target_conn.settimeout(0.1)
-
-            while _continue:
+            
+            while self.server.alive and _continue:
                 for a, b in ((self.conn, target_conn),
                         (target_conn, self.conn)): # pipe sockets together
                     try:
@@ -97,11 +107,12 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     def __call__(self):############################
         raise NotImplementedError()
 
-class TCPConnectionHandler:
+class TCPConnectionHandler(BaseHandler):
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
     
-    def __init__(self, conn, remote):
+    def __init__(self, conn, remote, *args, **kwargs):
+        BaseHandler.__init__(self, *args, **kwargs)
         self.conn = conn
         self.remote = remote
 
@@ -121,7 +132,7 @@ class TCPConnectionHandler:
                     request_header.unpack_addr(), request_header.dst_port,
                     self.remote[0], self.remote[1])
             TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](self.conn,
-                self.remote, request_header)()
+                self.remote, request_header, self.server)()
         except IOError as e:
             with PRINT_LOCK:
                 print >> sys.stderr, e
@@ -135,10 +146,11 @@ class TCPConnectionHandler:
 class Server:
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
-    def __init__(self, connection_handler_class, socket_event_function_name,
+    def __init__(self, event_handler_class, socket_event_function_name,
             socket_type, address = ('', 1080), timeout = 0.1):
         self.address = address
-        self.connection_handler_class = connection_handler_class
+        self.alive = False
+        self.event_handler_class = event_handler_class
         self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -149,19 +161,22 @@ class Server:
         self.timeout = timeout
 
     def serve_forever(self):
+        self.alive = True
+        
         with PRINT_LOCK:
             print "Serving SOCKS5 requests on %s:%u" % self.address
         
         try:
             while 1:
                 try:
-                    thread.start_new_thread(self.connection_handler_class(
+                    thread.start_new_thread(self.event_handler_class(
                         *getattr(self._sock,
-                        self.socket_event_function_name)()).__call__, ())
+                        self.socket_event_function_name)(),
+                        server = self).__call__, ())
                 except socket.error:
                     pass
         except KeyboardInterrupt:
-            pass
+            self.alive = False
 
         with PRINT_LOCK:
             print "Shutting down SOCKS5 server..."
@@ -178,8 +193,9 @@ class TCPServer(Server):
         self._sock.listen(self.backlog)
         Server.serve_forever(self)
 
-class UDPRequestHandler:
-    def __init__(self, datagram, remote):
+class UDPRequestHandler(BaseHandler):
+    def __init__(self, datagram, remote, *args, **kwargs):
+        BaseHandler.__init__(self, *args, **kwargs)
         self.datagram = datagram
         self.remote = remote
 
