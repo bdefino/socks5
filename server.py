@@ -18,6 +18,7 @@ __package__ = "socks5"
 import socket
 import sys
 import thread
+import time
 
 import header
 import method
@@ -71,6 +72,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         _continue = True
         reply = header.ReplyHeader()
         target_conn = None
+        timeout = self.server.backlog / 1000.0
 
         try:
             target_conn = socket.create_connection((
@@ -80,24 +82,33 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             reply.errno(e.args[0]) # this works even for unidentified errors
 
         if target_conn:
-            reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
+            reply._addr, reply._port = target_conn.getsockname() # indirect
             reply.detect_atyp()
         self.conn.sendall(str(reply))
 
         if target_conn:
-            self.conn.settimeout(0.1)
-            target_conn.settimeout(0.1)
+            self.conn.settimeout(timeout)
+            target_conn.settimeout(timeout)
             
             while self.server.alive and _continue:
                 for a, b in ((self.conn, target_conn),
                         (target_conn, self.conn)): # pipe sockets together
                     try:
-                        a.sendall(b.recv(4096))
+                        chunk = a.recv(4096)
                     except socket.timeout:
                         pass
                     except socket.error:
                         _continue = False
                         break
+                    
+                    try:
+                        b.sendall(chunk)
+                    except socket.timeout:
+                        pass
+                    except socket.error:
+                        _continue = False
+                        break
+                time.sleep(self.server.sleep)
             target_conn.close()
 
 class UDPAssociateRequestHandler(BaseTCPRequestHandler):
@@ -128,12 +139,12 @@ class TCPConnectionHandler(BaseHandler):
             
             
             with PRINT_LOCK:
-                print "Handling TCP request for %s:%u from %s:%u" % (
-                    request_header.unpack_addr(), request_header.dst_port,
-                    self.remote[0], self.remote[1])
+                print "Handling TCP request from %s:%u for %s:%u" % (
+                    self.remote[0], self.remote[1],
+                    request_header.unpack_addr(), request_header.dst_port)
             TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](self.conn,
                 self.remote, request_header, self.server)()
-        except IOError as e:
+        except IOError as e:#Exception as e
             with PRINT_LOCK:
                 print >> sys.stderr, e
 
@@ -147,10 +158,12 @@ class Server:
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
     def __init__(self, event_handler_class, socket_event_function_name,
-            socket_type, address = ('', 1080), timeout = 0.1):
+            socket_type, address = ('', 1080), backlog = 10, timeout = 0.1):
         self.address = address
         self.alive = False
+        self.backlog = backlog
         self.event_handler_class = event_handler_class
+        self.sleep = 1.0 / self.backlog
         self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -175,6 +188,7 @@ class Server:
                         server = self).__call__, ())
                 except socket.error:
                     pass
+                time.sleep(self.sleep)
         except KeyboardInterrupt:
             self.alive = False
 
@@ -186,8 +200,7 @@ class Server:
 class TCPServer(Server):
     def __init__(self, address = ('', 1080), backlog = 1, timeout = 0.1):
         Server.__init__(self, TCPConnectionHandler, "accept",
-            socket.SOCK_STREAM, address, timeout)
-        self.backlog = backlog
+            socket.SOCK_STREAM, address, backlog, timeout)
 
     def serve_forever(self):
         self._sock.listen(self.backlog)
@@ -204,6 +217,6 @@ class UDPRequestHandler(BaseHandler):
 
 if __name__ == "__main__":
     address = ('', 1080)
-    backlog = 1
+    backlog = 10
     timeout = 0.1
     TCPServer(address, backlog, timeout).serve_forever()
