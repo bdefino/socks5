@@ -39,7 +39,7 @@ class MethodQuery:
         self.nmethods = pack.unpack(fp.read(1))
         self.methods = []
 
-        for n in self.nmethods:
+        for n in range(self.nmethods):
             self.methods.append(pack.unpack(fp.read(1)))
         self.methods = tuple(self.methods)
 
@@ -66,5 +66,5 @@ class MethodResponse:
         self.ver = pack.unpack(fp.read(1))
         self.method = pack.unpack(fp.read(1))
 
-    def __str__(self, fp):
+    def __str__(self):
         return ''.join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))

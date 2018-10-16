@@ -16,6 +16,7 @@
 __package__ = "socks5"
 
 import errno
+import socket
 
 import pack
 
@@ -45,10 +46,10 @@ class BaseHeader:
         """set ATYP based on *.ADDR"""
         self.atyp = 3
 
-        if not '.' in addr:
+        if not '.' in self._addr:
             self.atyp = 1
 
-            if len(self.addr) == 8:
+            if len(self._addr) == 8:
                 self.atyp = 4
 
     def fload(self, fp):
@@ -125,7 +126,7 @@ class ReplyHeader(BaseHeader):
             ver = 5):
         BaseHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
         self.bnd_addr = self._addr
-        self.bnd_port = self.port
+        self.bnd_port = self._port
         self.rep = self._special
 
     def errno(self, e):########################
@@ -145,18 +146,18 @@ class ReplyHeader(BaseHeader):
         """load from a file-like object"""
         BaseHeader.fload(self, fp)
         self.bnd_addr = self._addr
-        self.bnd_port = self.port
+        self.bnd_port = self._port
         self.rep = self._special
 
     def __str__(self):
-        self._addr = self.bnd__addr
+        self._addr = self.bnd_addr
         self._port = self.bnd_port
         self._special = self.rep
         return BaseHeader.__str__(self)
 
     def unpack_addr(self):
         """return the IP address or domain name in BND.ADDR"""
-        self._addr = self.bnd__addr
+        self._addr = self.bnd_addr
         self._port = self.bnd_port
         return BaseHeader.unpack_addr(self)
 
@@ -199,16 +200,16 @@ class RequestHeader(BaseHeader):
         BaseHeader.fload(self, fp)
         self.cmd = self._special
         self.dst_addr = self._addr
-        self.dst_port = self.port
+        self.dst_port = self._port
 
     def __str__(self):
-        self._addr = self.dst__addr
+        self._addr = self.dst_addr
         self._port = self.dst_port
         self._special = self.cmd
         return BaseHeader.__str__(self)
 
     def unpack_dst_addr(self):
         """return the IP address of domain name in DST.ADDR"""
-        self._addr = self.dst__addr
+        self._addr = self.dst_addr
         self._port = self.dst_port
         return BaseHeader.unpack_addr(self)

@@ -19,6 +19,8 @@ import socket
 import sys
 import thread
 
+import header
+import method
 import pack
 
 __doc__ = """
@@ -55,7 +57,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
-    def __call__(self):########source_address????
+    def __call__(self):
         _continue = True
         reply = header.ReplyHeader()
         target_conn = None
@@ -63,7 +65,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         try:
             target_conn = socket.create_connection((
                 self.request_header.unpack_addr(),
-                self.request_header.dst_port), source_address = self.remote)
+                self.request_header.dst_port))
         except socket.error as e:
             reply.errno(e.args[0]) # this works even for unidentified errors
 
@@ -105,12 +107,12 @@ class TCPConnectionHandler:
 
     def __call__(self):
         fp = self.conn.makefile()
-        method_query = MethodQuery()
-        request_header = RequestHeader()
+        method_query = method.MethodQuery()
+        request_header = header.RequestHeader()
         
         try:
             method_query.fload(fp)
-            self.conn.sendall(str(MethodResponse())) # no authentication
+            self.conn.sendall(str(method.MethodResponse())) # no authentication
             request_header.fload(fp)
             
             
@@ -118,38 +120,38 @@ class TCPConnectionHandler:
                 print "Handling TCP request for %s:%u from %s:%u" % (
                     request_header.unpack_addr(), request_header.dst_port,
                     self.remote[0], self.remote[1])
-            TCPRequestHandler.CMD_TO_HANDLER[request_header.cmd](self.conn,
+            TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](self.conn,
                 self.remote, request_header)()
-        except Exception as e:
+        except IOError as e:
             with PRINT_LOCK:
                 print >> sys.stderr, e
 
         with PRINT_LOCK:
             print "Closing TCP connection between %s:%u and %s:%u" % (
                     self.remote[0], self.remote[1],
-                    request_header.unpack_addr(), request.dst_port)
+                    request_header.unpack_addr(), request_header.dst_port)
         self.conn.close()
 
 class Server:
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
     def __init__(self, connection_handler_class, socket_event_function_name,
-            protocol, address = ('', 1080), timeout = 0.1):
+            socket_type, address = ('', 1080), timeout = 0.1):
         self.address = address
         self.connection_handler_class = connection_handler_class
-        self.protocol = protocol
-        self._sock = socket.socket(socket.AF_INET, self.protocol)
+        self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._sock.settimeout(timeout)
         self.socket_event_function_name = socket_event_function_name
+        self.socket_type = socket_type
         self.timeout = timeout
 
     def serve_forever(self):
         with PRINT_LOCK:
             print "Serving SOCKS5 requests on %s:%u" % self.address
-
+        
         try:
             while 1:
                 try:
@@ -169,7 +171,7 @@ class Server:
 class TCPServer(Server):
     def __init__(self, address = ('', 1080), backlog = 1, timeout = 0.1):
         Server.__init__(self, TCPConnectionHandler, "accept",
-            socket.getprotobyname("tcp"), address, timeout)
+            socket.SOCK_STREAM, address, timeout)
         self.backlog = backlog
 
     def serve_forever(self):
