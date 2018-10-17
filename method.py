@@ -35,12 +35,14 @@ class MethodQuery:
 
     def fload(self, fp):
         """load from a file-like object"""
+        n = 0
         self.ver = pack.unpack(fp.read(1))
         self.nmethods = pack.unpack(fp.read(1))
         self.methods = []
 
-        for n in range(self.nmethods):
+        while n < self.nmethods: # more efficient
             self.methods.append(pack.unpack(fp.read(1)))
+            n += 1
         self.methods = tuple(self.methods)
 
     def __str__(self):

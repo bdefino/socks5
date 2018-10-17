@@ -19,6 +19,7 @@ import socket
 import sys
 import thread
 import time
+import traceback
 
 import header
 import method
@@ -231,7 +232,7 @@ class DEFAULT:
     BACKLOG = 1000
     BUFLEN = 2 ** 16
     CONN_SLEEP = 0.001
-    CONN_INACTIVE = 300
+    CONN_INACTIVE = 10
     NTHREADS = -1
     TIMEOUT = 0.001
 
@@ -318,7 +319,8 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
             pass
         except Exception as e:
             with self.server.print_lock:
-                print >> sys.stderr, e
+                traceback.print_exception(type(e), e, traceback.extract_tb(),
+                    file = sys.stderr)
         finally:
             with self.server.print_lock:
                 print "Closing connection with %s:%u" % self.remote
