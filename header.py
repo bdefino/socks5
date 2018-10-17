@@ -42,16 +42,6 @@ class BaseHeader:
         self._special = special
         self.ver = ver
 
-    def detect_atyp(self):
-        """set ATYP based on *.ADDR"""
-        self.atyp = 3
-
-        if not '.' in self._addr:
-            self.atyp = 1
-
-            if len(self._addr) == 8:
-                self.atyp = 4
-
     def fload(self, fp):
         """load from a file-like object"""
         self.ver = pack.unpack(fp.read(1))
@@ -70,6 +60,7 @@ class BaseHeader:
     def __str__(self):
         header = [pack.pack(self.ver, 1), pack.pack(self._special, 1),
             pack.pack(self.rsv, 1), pack.pack(self.atyp, 1)]
+        self.update_addrinfo()
 
         if self.atyp == 3:
             for e in (pack.pack(len(self._addr), 1), self._addr):
@@ -88,6 +79,16 @@ class BaseHeader:
                 af = socket.AF_INET6
             return socket.inet_ntop(af, self._addr)
         return self._addr
+
+    def update_addrinfo(self):
+        """set ATYP based on *.ADDR"""
+        self.atyp = 3
+
+        if not '.' in self._addr:
+            self.atyp = 1
+
+            if len(self._addr) == 8:
+                self.atyp = 4
 
 class ReplyHeader(BaseHeader):
     """
@@ -128,6 +129,7 @@ class ReplyHeader(BaseHeader):
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
+        BaseHeader.update_addrinfo(self)
 
     def errno(self, e):########################
         """
@@ -150,9 +152,8 @@ class ReplyHeader(BaseHeader):
         self.rep = self._special
 
     def __str__(self):
-        self._addr = self.bnd_addr
-        self._port = self.bnd_port
         self._special = self.rep
+        self.update_addrinfo()
         return BaseHeader.__str__(self)
 
     def unpack_addr(self):
@@ -160,6 +161,12 @@ class ReplyHeader(BaseHeader):
         self._addr = self.bnd_addr
         self._port = self.bnd_port
         return BaseHeader.unpack_addr(self)
+
+    def update_addrinfo(self):
+        """overwrite the underlying address info and detect ATYP"""
+        self._addr = self.bnd_addr
+        self._port = self.bnd_port
+        BaseHeader.update_addrinfo(self)
 
 class RequestHeader(BaseHeader):
     """
@@ -203,9 +210,8 @@ class RequestHeader(BaseHeader):
         self.dst_port = self._port
 
     def __str__(self):
-        self._addr = self.dst_addr
-        self._port = self.dst_port
         self._special = self.cmd
+        self.update_addrinfo()
         return BaseHeader.__str__(self)
 
     def unpack_dst_addr(self):
@@ -213,3 +219,9 @@ class RequestHeader(BaseHeader):
         self._addr = self.dst_addr
         self._port = self.dst_port
         return BaseHeader.unpack_addr(self)
+
+    def update_addrinfo(self):
+        """overwrite the underlying address info and detect ATYP"""
+        self._addr = self.dst_addr
+        self._port = self.dst_port
+        BaseHeader.update_addrinfo(self)

@@ -31,93 +31,198 @@ a simple SOCKS5 server framework
 doesn't support authentication
 """
 
-global PRINT_LOCK # global synchronization mechanism
-PRINT_LOCK = thread.allocate_lock()
-
 def server_factory(protocol = socket.getprotobyname("tcp"), *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
     return {socket.getprotobyname("tcp"): TCPServer,
         socket.getprotobyname("udp"): UDPServer}[protocol](*args, **kwargs)
 
-class BaseHandler:
-    """allows a handler to access the server that (in)directly spawned it"""
+class BaseServerSpawnedEventHandler:
+    """
+    allows an event handler to access the server
+    that (in)directly spawned it
+    """
     
-    def __init__(self, server):
+    def __init__(self, event, server):
+        self.event = event
         self.server = server
 
     def __call__(self):
         raise NotImplementedError()
 
-class BaseTCPRequestHandler(BaseHandler):
-    def __init__(self, conn, remote, request_header, *args, **kwargs):
-        BaseHandler.__init__(self, *args, **kwargs)
-        self.conn = conn
-        self.remote = remote
+class BaseRequestHandler(BaseServerSpawnedEventHandler):
+    def __init__(self, request_header, *args, **kwargs):
+        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
         self.request_header = request_header
 
-    def __call__(self):
-        raise NotImplementedError()
+class BaseTCPRequestHandler(BaseRequestHandler):
+    def __init__(self, *args, **kwargs):
+        BaseRequestHandler.__init__(self, *args, **kwargs)
+        self.conn, self.remote = self.event
+
+    def pipe_conn_with(self, other_conn):
+        """pipe the connection with another connection"""
+        _continue = True
+        last = time.time()
+        other_conn.settimeout(self.server.timeout)
+        self.conn.settimeout(self.server.timeout)
+        
+        while self.server.alive and _continue:
+            for a, b in ((other_conn, self.conn), (self.conn, other_conn)):
+                chunk = ""
+                time.sleep(self.server.conn_sleep)
+                
+                try:
+                    chunk = a.recv(self.server.buflen)
+                    last = time.time()
+                except socket.timeout:
+                    if time.time() - last >= self.server.conn_inactive:
+                        _continue = False
+                        break
+                except socket.error:
+                    _continue = False
+                    break
+
+                while 1: # TCP is lossless
+                    try:
+                        b.sendall(chunk)
+                        break
+                    except socket.timeout:
+                        pass
+                    except socket.error:
+                        _continue = False
+                        break
+
+                if not _continue:
+                    break
+
+class BaseUDPRequestHandler(BaseServerSpawnedEventHandler):
+    def __init__(self, *args, **kwargs):
+        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
+        self.datagram, self.remote = self.event
 
 class BindRequestHandler(BaseTCPRequestHandler):
+    """
+    The BIND request is used in protocols which require the client to
+    accept connections from the server.  FTP is a well-known example,
+    which uses the primary client-to-server connection for commands and
+    status reports, but may use a server-to-client connection for
+    transferring data on demand (e.g. LS, GET, PUT).
+
+    It is expected that the client side of an application protocol will
+    use the BIND request only to establish secondary connections after a
+    primary connection is established using CONNECT.  In is expected that
+    a SOCKS server will use DST.ADDR and DST.PORT in evaluating the BIND
+    request.
+
+    Two replies are sent from the SOCKS server to the client during a
+    BIND operation.  The first is sent after the server creates and binds
+    a new socket.  The BND.PORT field contains the port number that the
+    SOCKS server assigned to listen for an incoming connection.  The
+    BND.ADDR field contains the associated IP address.  The client will
+    typically use these pieces of information to notify (via the primary
+    or control connection) the application server of the rendezvous
+    address.  The second reply occurs only after the anticipated incoming
+    connection succeeds or fails.
+
+    In the second reply, the BND.PORT and BND.ADDR fields contain the
+    address and port number of the connecting host.
+    """
+    
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
-    def __call__(self):#########################
-        raise NotImplementedError()
+    def __call__(self):
+        bound = False
+        conn_reply = header.ReplyHeader()
+        _continue = True
+        last = time.time()
+        server_reply = header.ReplyHeader()
+        server_sock = None
+        target_conn = None
+        target_remote = None
+
+        try:
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock.bind((self.request.unpack_addr(), 0))
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            server_sock.settimeout(self.server.timeout)
+            bound = True
+        except socket.error as e:
+            server_reply.errno(e.args[0])
+
+        if bound:
+            server_reply._addr, server_reply._port = server_sock.getsockname()
+        self.conn.sendall(str(server_reply))
+
+        if bound:
+            server_sock.listen(1)
+            
+            while self.server.alive and not target_conn: # accept 1 connection
+                try:
+                    target_conn, target_remote = server_sock.accept()
+                except socket.timeout:
+                    if time.time() - last >= self.server.conn_inactive:
+                        conn_reply.rep = 6
+                        break
+                except socket.error as e:
+                    conn_reply.errno(e.args[0])
+                    break
+        
+        if server_sock:
+            server_sock.close()
+        
+        if target_conn:
+            conn_reply.bnd_addr, conn_reply.bnd_port = target_remote
+
+        try:
+            self.conn.sendall(str(conn_reply))
+
+            if target_conn:
+                self.pipe_conn_with(target_conn)
+        finally:
+            if target_conn:
+                target_conn.close()
 
 class ConnectRequestHandler(BaseTCPRequestHandler):
+    """
+    In the reply to a CONNECT, BND.PORT contains the port number that the
+    server assigned to connect to the target host, while BND.ADDR
+    contains the associated IP address.  The supplied BND.ADDR is often
+    different from the IP address that the client uses to reach the SOCKS
+    server, since such servers are often multi-homed.  It is expected
+    that the SOCKS server will use DST.ADDR and DST.PORT, and the
+    client-side source address and port in evaluating the CONNECT
+    request.
+    """
+    
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):
         _continue = True
+        last = time.time()
         reply = header.ReplyHeader()
         target_conn = None
 
         try:
             target_conn = socket.create_connection((
                 self.request_header.unpack_addr(),
-                self.request_header.dst_port))
+                self.request_header.dst_port), self.server.conn_inactive)
         except socket.error as e:
-            reply.errno(e.args[0]) # this works even for unidentified errors
+            reply.errno(e.args[0])
 
         if target_conn:
-            reply._addr, reply._port = target_conn.getsockname() # indirect
-            reply.detect_atyp()
-        self.conn.sendall(str(reply))
-
-        if target_conn:
-            self.conn.settimeout(self.server.timeout)
-            target_conn.settimeout(self.server.timeout)
+            reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
+        
+        try:
+            self.conn.sendall(str(reply))
             
-            while self.server.alive and _continue:
-                for a, b in ((self.conn, target_conn),
-                        (target_conn, self.conn)): # pipe sockets' I/O together
-                    chunk = ""
-                    time.sleep(self.server.conn_sleep)
-                    
-                    try:
-                        chunk = a.recv(self.server.buflen)
-                    except socket.timeout:
-                        pass
-                    except socket.error:
-                        _continue = False
-                        break
-                    
-                    try:
-                        b.sendall(chunk)
-                    except socket.timeout:
-                        pass
-                    except socket.error:
-                        _continue = False
-                        break
-                
-                    if chunk:
-                        last = time.time()
-                    elif time.time() - last >= self.server.conn_timeout:
-                        _continue = False
-                        break
-            target_conn.close()
+            if target_conn:
+                self.pipe_conn_with(target_conn)
+        finally:
+            if target_conn:
+                target_conn.close()
 
 class DEFAULT:
     """global default values (optimized for speed)"""
@@ -126,7 +231,7 @@ class DEFAULT:
     BACKLOG = 1000
     BUFLEN = 2 ** 16
     CONN_SLEEP = 0.001
-    CONN_TIMEOUT = 300 # time out a connection after 5 minutes of inactivity
+    CONN_INACTIVE = 300
     NTHREADS = -1
     TIMEOUT = 0.001
 
@@ -135,17 +240,19 @@ class Server(threaded.Threaded):
     
     def __init__(self, event_handler_class, socket_event_function_name,
             socket_type, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN, conn_sleep = DEFAULT.CONN_SLEEP,
-            conn_timeout = DEFAULT.CONN_TIMEOUT, nthreads = DEFAULT.NTHREADS,
+            buflen = DEFAULT.BUFLEN,
+            conn_inactive = DEFAULT.CONN_INACTIVE,
+            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
         threaded.Threaded.__init__(self, nthreads)
         self.address = address
         self.alive = False
         self.backlog = backlog
         self.buflen = buflen
+        self.conn_inactive = conn_inactive # inactivity threshold
         self.conn_sleep = conn_sleep
-        self.conn_timeout = conn_timeout
         self.event_handler_class = event_handler_class
+        self.print_lock = thread.allocate_lock() # synchronize printing
         self.sleep = 1.0 / self.backlog # optimal value
         self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.bind(self.address)
@@ -159,49 +266,40 @@ class Server(threaded.Threaded):
     def __call__(self):
         self.alive = True
         
-        with PRINT_LOCK:
+        with self.print_lock:
             print "Serving SOCKS5 requests on %s:%u" % self.address
         
         try:
             while 1:
                 try:
                     self.allocate_thread(self.event_handler_class(
-                        *getattr(self._sock,
-                        self.socket_event_function_name)(),
-                        server = self).__call__)
+                        getattr(self._sock, self.socket_event_function_name)(),
+                        self).__call__)
                 except socket.error:
                     pass
                 time.sleep(self.sleep)
         except KeyboardInterrupt:
             self.alive = False
         finally:
-            with PRINT_LOCK:
+            with self.print_lock:
                 print "Shutting down SOCKS5 server..."
             self._sock.shutdown(socket.SHUT_RDWR)
             self._sock.close()
 
-class UDPAssociateRequestHandler(BaseTCPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
-
-    def __call__(self):############################
-        raise NotImplementedError()
-
-class TCPConnectionHandler(BaseHandler):
-    CMD_TO_TCPREQUESTHANDLER = {1: ConnectRequestHandler,
-        2: BindRequestHandler, 3: UDPAssociateRequestHandler}
+class TCPConnectionHandler(BaseServerSpawnedEventHandler):
+    CMD_TO_HANDLER = {1: ConnectRequestHandler,
+        }#2: BindRequestHandler, 3: UDPAssociateRequestHandler}
     
-    def __init__(self, conn, remote, *args, **kwargs):
-        BaseHandler.__init__(self, *args, **kwargs)
-        self.conn = conn
-        self.remote = remote
+    def __init__(self, *args, **kwargs):
+        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
+        self.conn, self.remote = self.event
 
     def __call__(self):
         fp = self.conn.makefile()
         method_query = method.MethodQuery()
         request_header = header.RequestHeader()
         
-        with PRINT_LOCK:
+        with self.server.print_lock:
             print "Handling connection from %s:%u" % self.remote
         
         try:
@@ -209,38 +307,65 @@ class TCPConnectionHandler(BaseHandler):
             self.conn.sendall(str(method.MethodResponse())) # no authentication
             request_header.fload(fp)
             
-            TCPConnectionHandler.CMD_TO_TCPREQUESTHANDLER[request_header.cmd](
-                self.conn, self.remote, request_header, self.server)()
+            TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
+                request_header, self.event, self.server)()
         except KeyError: # command not supported
-            self.conn.sendall(str(header.ReplyHeader(rep = 7)))
+            try:
+                self.conn.sendall(str(header.ReplyHeader(rep = 7)))
+            except socket.error:
+                pass
         except socket.error:
             pass
-        except IOError as e:#Exception as e
-            with PRINT_LOCK:
+        except Exception as e:
+            with self.server.print_lock:
                 print >> sys.stderr, e
         finally:
-            with PRINT_LOCK:
+            with self.server.print_lock:
                 print "Closing connection with %s:%u" % self.remote
             self.conn.close()
 
 class TCPServer(Server):
     def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN, conn_sleep = DEFAULT.CONN_SLEEP,
-            conn_timeout = DEFAULT.CONN_TIMEOUT, nthreads = DEFAULT.NTHREADS,
+            buflen = DEFAULT.BUFLEN,
+            conn_inactive = DEFAULT.CONN_INACTIVE,
+            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
         Server.__init__(self, TCPConnectionHandler, "accept",
-            socket.SOCK_STREAM, address, backlog, buflen, conn_sleep,
-            conn_timeout, nthreads, timeout)
+            socket.SOCK_STREAM, address, backlog, buflen, conn_inactive,
+            conn_sleep, nthreads, timeout)
 
     def __call__(self):
         self._sock.listen(self.backlog)
         Server.__call__(self)
 
-class UDPRequestHandler(BaseHandler):
-    def __init__(self, datagram, remote, *args, **kwargs):
-        BaseHandler.__init__(self, *args, **kwargs)
-        self.datagram = datagram
-        self.remote = remote
+class UDPAssociateRequestHandler(BaseTCPRequestHandler):
+    """
+    The UDP ASSOCIATE request is used to establish an association within
+    the UDP relay process to handle UDP datagrams.  The DST.ADDR and
+    DST.PORT fields contain the address and port that the client expects
+    to use to send UDP datagrams on for the association.  The server MAY
+    use this information to limit access to the association.  If the
+    client is not in possesion of the information at the time of the UDP
+    ASSOCIATE, the client MUST use a port number and address of all
+    zeros.
+
+    A UDP association terminates when the TCP connection that the UDP
+    ASSOCIATE request arrived on terminates.
+
+    In the reply to a UDP ASSOCIATE request, the BND.PORT and BND.ADDR
+    fields indicate the port number/address where the client MUST send
+    UDP request messages to be relayed.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
+
+    def __call__(self):############################
+        raise NotImplementedError()
+
+class UDPRequestHandler(BaseUDPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        BaseUDPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):###########################
         raise NotImplementedError()
@@ -249,9 +374,9 @@ if __name__ == "__main__":
     address = DEFAULT.ADDRESS
     backlog = DEFAULT.BACKLOG
     buflen = DEFAULT.BUFLEN
+    conn_inactive = DEFAULT.CONN_INACTIVE
     conn_sleep = DEFAULT.CONN_SLEEP
-    conn_timeout = DEFAULT.CONN_TIMEOUT
     nthreads = DEFAULT.NTHREADS
     timeout = DEFAULT.TIMEOUT
-    TCPServer(address, backlog, buflen, conn_sleep, conn_timeout, nthreads,
+    TCPServer(address, backlog, buflen, conn_inactive, conn_sleep, nthreads,
         timeout)()
