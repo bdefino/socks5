@@ -23,13 +23,13 @@ import time
 import header
 import method
 import pack
+import threaded
 
 __doc__ = """
 a simple SOCKS5 server framework
 
 doesn't support authentication
-"""#################test for speed
-#################isn't working with Qupzilla
+"""
 
 global PRINT_LOCK # global synchronization mechanism
 PRINT_LOCK = thread.allocate_lock()
@@ -94,6 +94,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
                 for a, b in ((self.conn, target_conn),
                         (target_conn, self.conn)): # pipe sockets' I/O together
                     chunk = ""
+                    time.sleep(self.server.conn_sleep)
                     
                     try:
                         chunk = a.recv(self.server.buflen)
@@ -110,31 +111,42 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
                     except socket.error:
                         _continue = False
                         break
-                time.sleep(self.server.sleep)
+                
+                    if chunk:
+                        last = time.time()
+                    elif time.time() - last >= self.server.conn_timeout:
+                        _continue = False
+                        break
             target_conn.close()
 
 class DEFAULT:
-    """global default values"""
+    """global default values (optimized for speed)"""
     
     ADDRESS = ("", 1080)
     BACKLOG = 1000
-    BUFLEN = 2 ** 14
-    SLEEP = 0.001
+    BUFLEN = 2 ** 16
+    CONN_SLEEP = 0.001
+    CONN_TIMEOUT = 300 # time out a connection after 5 minutes of inactivity
+    NTHREADS = -1
     TIMEOUT = 0.001
 
-class Server:
+class Server(threaded.Threaded):
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
     def __init__(self, event_handler_class, socket_event_function_name,
             socket_type, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN, sleep = DEFAULT.SLEEP,
+            buflen = DEFAULT.BUFLEN, conn_sleep = DEFAULT.CONN_SLEEP,
+            conn_timeout = DEFAULT.CONN_TIMEOUT, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
+        threaded.Threaded.__init__(self, nthreads)
         self.address = address
         self.alive = False
         self.backlog = backlog
         self.buflen = buflen
+        self.conn_sleep = conn_sleep
+        self.conn_timeout = conn_timeout
         self.event_handler_class = event_handler_class
-        self.sleep = sleep
+        self.sleep = 1.0 / self.backlog # optimal value
         self._sock = socket.socket(socket.AF_INET, socket_type)
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -144,7 +156,7 @@ class Server:
         self.socket_type = socket_type
         self.timeout = timeout
 
-    def serve_forever(self):
+    def __call__(self):
         self.alive = True
         
         with PRINT_LOCK:
@@ -153,10 +165,10 @@ class Server:
         try:
             while 1:
                 try:
-                    thread.start_new_thread(self.event_handler_class(
+                    self.allocate_thread(self.event_handler_class(
                         *getattr(self._sock,
                         self.socket_event_function_name)(),
-                        server = self).__call__, ())
+                        server = self).__call__)
                 except socket.error:
                     pass
                 time.sleep(self.sleep)
@@ -188,7 +200,7 @@ class TCPConnectionHandler(BaseHandler):
         fp = self.conn.makefile()
         method_query = method.MethodQuery()
         request_header = header.RequestHeader()
-
+        
         with PRINT_LOCK:
             print "Handling connection from %s:%u" % self.remote
         
@@ -213,14 +225,16 @@ class TCPConnectionHandler(BaseHandler):
 
 class TCPServer(Server):
     def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN, sleep = DEFAULT.SLEEP,
+            buflen = DEFAULT.BUFLEN, conn_sleep = DEFAULT.CONN_SLEEP,
+            conn_timeout = DEFAULT.CONN_TIMEOUT, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
         Server.__init__(self, TCPConnectionHandler, "accept",
-            socket.SOCK_STREAM, address, backlog, buflen, timeout)
+            socket.SOCK_STREAM, address, backlog, buflen, conn_sleep,
+            conn_timeout, nthreads, timeout)
 
-    def serve_forever(self):
+    def __call__(self):
         self._sock.listen(self.backlog)
-        Server.serve_forever(self)
+        Server.__call__(self)
 
 class UDPRequestHandler(BaseHandler):
     def __init__(self, datagram, remote, *args, **kwargs):
@@ -235,6 +249,9 @@ if __name__ == "__main__":
     address = DEFAULT.ADDRESS
     backlog = DEFAULT.BACKLOG
     buflen = DEFAULT.BUFLEN
-    sleep = DEFAULT.SLEEP
+    conn_sleep = DEFAULT.CONN_SLEEP
+    conn_timeout = DEFAULT.CONN_TIMEOUT
+    nthreads = DEFAULT.NTHREADS
     timeout = DEFAULT.TIMEOUT
-    TCPServer(address, backlog, buflen, sleep, timeout).serve_forever()
+    TCPServer(address, backlog, buflen, conn_sleep, conn_timeout, nthreads,
+        timeout)()
