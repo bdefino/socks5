@@ -30,12 +30,14 @@ __doc__ = """
 a simple SOCKS5 server framework
 
 doesn't support authentication
-"""
+"""########move from thread spawning to task iteration
+########slim down code
+######test everything
 
-def server_factory(protocol = socket.getprotobyname("tcp"), *args, **kwargs):
+def server_factory(proto_name, *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
-    return {socket.getprotobyname("tcp"): TCPServer,
-        socket.getprotobyname("udp"): UDPServer}[protocol](*args, **kwargs)
+    return {"tcp": TCPServer, "udp": UDPServer}[protocol.strip().lower()](
+        *args, **kwargs)
 
 class BaseServerSpawnedEventHandler:
     """
@@ -64,8 +66,12 @@ class BaseTCPRequestHandler(BaseRequestHandler):
         """pipe the connection with another connection"""
         _continue = True
         last = time.time()
-        other_conn.settimeout(self.server.timeout)
-        self.conn.settimeout(self.server.timeout)
+
+        try:
+            other_conn.settimeout(self.server.timeout)
+            self.conn.settimeout(self.server.timeout)
+        except socket.error:
+            pass
         
         while self.server.alive and _continue:
             for a, b in ((other_conn, self.conn), (self.conn, other_conn)):
@@ -133,55 +139,47 @@ class BindRequestHandler(BaseTCPRequestHandler):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):
-        bound = False
         conn_reply = header.ReplyHeader()
-        _continue = True
-        last = time.time()
         server_reply = header.ReplyHeader()
         server_sock = None
+        start = time.time()
         target_conn = None
         target_remote = None
-
+        
         try:
             server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             server_sock.bind((self.request.unpack_addr(), 0))
+            server_sock.listen(1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            server_sock.settimeout(self.server.timeout)
-            bound = True
+            server_sock.settimeout(self.server.conn_inactive)
+            server_reply.bnd_addr, server_reply.bnd_port \
+                = server_sock.getsockname()
         except socket.error as e:
             server_reply.errno(e.args[0])
-
-        if bound:
-            server_reply._addr, server_reply._port = server_sock.getsockname()
-        self.conn.sendall(str(server_reply))
-
-        if bound:
-            server_sock.listen(1)
+        
+        try:
+            self.conn.settimeout(self.server.timeout)
+            self.conn.sendall(str(server_reply))
             
-            while self.server.alive and not target_conn: # accept 1 connection
+            if server_reply.bnd_port: # accept the first connection
                 try:
                     target_conn, target_remote = server_sock.accept()
-                except socket.timeout:
-                    if time.time() - last >= self.server.conn_inactive:
-                        conn_reply.rep = 6
-                        break
+                    conn_reply.bnd_addr, conn_reply.bnd_port \
+                        = target_remote
                 except socket.error as e:
                     conn_reply.errno(e.args[0])
-                    break
-        
-        if server_sock:
-            server_sock.close()
-        
-        if target_conn:
-            conn_reply.bnd_addr, conn_reply.bnd_port = target_remote
 
-        try:
+            if server_sock: # close the server ASAP
+                server_sock.close()
             self.conn.sendall(str(conn_reply))
-
+            
             if target_conn:
                 self.pipe_conn_with(target_conn)
         finally:
+            if server_sock:
+                server_sock.close()
+            
             if target_conn:
                 target_conn.close()
 
@@ -201,8 +199,6 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):
-        _continue = True
-        last = time.time()
         reply = header.ReplyHeader()
         target_conn = None
 
@@ -210,13 +206,12 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             target_conn = socket.create_connection((
                 self.request_header.unpack_addr(),
                 self.request_header.dst_port), self.server.conn_inactive)
+            reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
         except socket.error as e:
             reply.errno(e.args[0])
-
-        if target_conn:
-            reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
         
         try:
+            self.conn.settimeout(self.server.timeout)
             self.conn.sendall(str(reply))
             
             if target_conn:
@@ -231,7 +226,7 @@ class DEFAULT:
     ADDRESS = ("", 1080)
     BACKLOG = 1000
     CONN_SLEEP = 0.001
-    CONN_INACTIVE = 10
+    CONN_INACTIVE = 300
     NTHREADS = -1
     TCP_BUFLEN = 65536
     TIMEOUT = 0.001
@@ -286,9 +281,74 @@ class Server(threaded.Threaded):
             self._sock.shutdown(socket.SHUT_RDWR)
             self._sock.close()
 
+class UDPAssociateRequestHandler(BaseTCPRequestHandler):
+    """
+    The UDP ASSOCIATE request is used to establish an association within
+    the UDP relay process to handle UDP datagrams.  The DST.ADDR and
+    DST.PORT fields contain the address and port that the client expects
+    to use to send UDP datagrams on for the association.  The server MAY
+    use this information to limit access to the association.  If the
+    client is not in possesion of the information at the time of the UDP
+    ASSOCIATE, the client MUST use a port number and address of all
+    zeros.
+
+    A UDP association terminates when the TCP connection that the UDP
+    ASSOCIATE request arrived on terminates.
+
+    In the reply to a UDP ASSOCIATE request, the BND.PORT and BND.ADDR
+    fields indicate the port number/address where the client MUST send
+    UDP request messages to be relayed.
+    """
+    
+    def __init__(self, *args, **kwargs):
+        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
+
+    def __call__(self):
+        bound = False
+        reply = header.ReplyHeader()
+        server_sock = None
+        target_address = (request.unpack_addr(), request.dst_port)
+        
+        try:
+            server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            server_sock.bind((self.request.unpack_addr(), 0))
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            server_sock.settimeout(self.server.timeout)
+            reply.bnd_addr, reply.bnd_port = server_sock.getpeername()
+        except socket.error as e:
+            reply.errno(e.args[0])
+        
+        try:
+            self.conn.settimeout(self.server.timeout)
+            self.conn.sendall(str(reply))
+
+            if reply.bnd_port:
+                while 1:
+                    try:
+                        self.conn.recv()
+                    except socket.timeout:
+                        pass
+                    except socket.error:
+                        break
+                    
+                    try:
+                        datagram, remote = server_sock.recvfrom()
+                    except socket.error:
+                        continue
+                    
+                    if remote[0] == self.remote[0]: # filter datagrams
+                        try:
+                            server_sock.sendto(datagram, target_address)
+                        except socket.error:
+                            pass
+        finally:
+            if server_sock:
+                server_sock.close()
+
 class TCPConnectionHandler(BaseServerSpawnedEventHandler):
-    CMD_TO_HANDLER = {1: ConnectRequestHandler,
-        }#2: BindRequestHandler, 3: UDPAssociateRequestHandler}
+    CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
+        3: UDPAssociateRequestHandler}
     
     def __init__(self, *args, **kwargs):
         BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
@@ -314,8 +374,6 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
                 self.conn.sendall(str(header.ReplyHeader(rep = 7)))
             except socket.error:
                 pass
-        except socket.error:
-            pass
         except Exception as e:
             with self.server.print_lock:
                 print >> sys.stderr, traceback.format_exc()
@@ -345,31 +403,6 @@ class UDPServer(Server):
         Server.__init__(self, UDPDatagramHandler, lambda s: s.recvfrom(buflen),
             socket.SOCK_DGRAM, address, backlog, buflen, conn_inactive,
             conn_sleep, nthreads, timeout)
-
-class UDPAssociateRequestHandler(BaseTCPRequestHandler):
-    """
-    The UDP ASSOCIATE request is used to establish an association within
-    the UDP relay process to handle UDP datagrams.  The DST.ADDR and
-    DST.PORT fields contain the address and port that the client expects
-    to use to send UDP datagrams on for the association.  The server MAY
-    use this information to limit access to the association.  If the
-    client is not in possesion of the information at the time of the UDP
-    ASSOCIATE, the client MUST use a port number and address of all
-    zeros.
-
-    A UDP association terminates when the TCP connection that the UDP
-    ASSOCIATE request arrived on terminates.
-
-    In the reply to a UDP ASSOCIATE request, the BND.PORT and BND.ADDR
-    fields indicate the port number/address where the client MUST send
-    UDP request messages to be relayed.
-    """
-    
-    def __init__(self, *args, **kwargs):
-        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
-
-    def __call__(self):############################
-        raise NotImplementedError()
 
 class UDPDatagramHandler:
     def __init__(self, *args, **kwargs):
