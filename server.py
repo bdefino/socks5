@@ -96,9 +96,9 @@ class BaseTCPRequestHandler(BaseRequestHandler):
                 if not _continue:
                     break
 
-class BaseUDPRequestHandler(BaseServerSpawnedEventHandler):
+class BaseUDPRequestHandler(BaseRequestHandler):
     def __init__(self, *args, **kwargs):
-        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
+        BaseRequestHandler.__init__(self, *args, **kwargs)
         self.datagram, self.remote = self.event
 
 class BindRequestHandler(BaseTCPRequestHandler):
@@ -230,19 +230,19 @@ class DEFAULT:
     
     ADDRESS = ("", 1080)
     BACKLOG = 1000
-    BUFLEN = 2 ** 16
     CONN_SLEEP = 0.001
     CONN_INACTIVE = 10
     NTHREADS = -1
+    TCP_BUFLEN = 65536
     TIMEOUT = 0.001
+    UDP_BUFLEN = 512
 
 class Server(threaded.Threaded):
     """base class for an interruptible server (not exclusively for SOCKS5)"""
     
-    def __init__(self, event_handler_class, socket_event_function_name,
+    def __init__(self, event_handler_class, socket_event_function,
             socket_type, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN,
-            conn_inactive = DEFAULT.CONN_INACTIVE,
+            buflen = DEFAULT.UDP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
             conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
         threaded.Threaded.__init__(self, nthreads)
@@ -260,7 +260,7 @@ class Server(threaded.Threaded):
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._sock.settimeout(timeout)
-        self.socket_event_function_name = socket_event_function_name
+        self.socket_event_function = socket_event_function
         self.socket_type = socket_type
         self.timeout = timeout
 
@@ -274,8 +274,7 @@ class Server(threaded.Threaded):
             while 1:
                 try:
                     self.allocate_thread(self.event_handler_class(
-                        getattr(self._sock, self.socket_event_function_name)(),
-                        self).__call__)
+                        self.socket_event_function(self._sock), self).__call__)
                 except socket.error:
                     pass
                 time.sleep(self.sleep)
@@ -327,17 +326,25 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
 
 class TCPServer(Server):
     def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.BUFLEN,
-            conn_inactive = DEFAULT.CONN_INACTIVE,
+            buflen = DEFAULT.TCP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
             conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
             timeout = DEFAULT.TIMEOUT):
-        Server.__init__(self, TCPConnectionHandler, "accept",
+        Server.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
             socket.SOCK_STREAM, address, backlog, buflen, conn_inactive,
             conn_sleep, nthreads, timeout)
 
     def __call__(self):
         self._sock.listen(self.backlog)
         Server.__call__(self)
+
+class UDPServer(Server):
+    def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
+            buflen = DEFAULT.UDP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
+            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
+            timeout = DEFAULT.TIMEOUT):
+        Server.__init__(self, UDPDatagramHandler, lambda s: s.recvfrom(buflen),
+            socket.SOCK_DGRAM, address, backlog, buflen, conn_inactive,
+            conn_sleep, nthreads, timeout)
 
 class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     """
@@ -364,6 +371,11 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     def __call__(self):############################
         raise NotImplementedError()
 
+class UDPDatagramHandler:
+    def __init__(self, *args, **kwargs):
+        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
+        self.datagram, self.remote = self.event
+
 class UDPRequestHandler(BaseUDPRequestHandler):
     def __init__(self, *args, **kwargs):
         BaseUDPRequestHandler.__init__(self, *args, **kwargs)
@@ -374,7 +386,7 @@ class UDPRequestHandler(BaseUDPRequestHandler):
 if __name__ == "__main__":
     address = DEFAULT.ADDRESS
     backlog = DEFAULT.BACKLOG
-    buflen = DEFAULT.BUFLEN
+    buflen = DEFAULT.TCP_BUFLEN
     conn_inactive = DEFAULT.CONN_INACTIVE
     conn_sleep = DEFAULT.CONN_SLEEP
     nthreads = DEFAULT.NTHREADS
