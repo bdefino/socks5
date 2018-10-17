@@ -319,8 +319,7 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
             pass
         except Exception as e:
             with self.server.print_lock:
-                traceback.print_exception(type(e), e, traceback.extract_tb(),
-                    file = sys.stderr)
+                print >> sys.stderr, traceback.format_exc()
         finally:
             with self.server.print_lock:
                 print "Closing connection with %s:%u" % self.remote
