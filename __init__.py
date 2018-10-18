@@ -19,3 +19,4 @@ __doc__ = "a simple RFC 1928-compliant SOCKS5 library"
 
 import header
 import method
+import server

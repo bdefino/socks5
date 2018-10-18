@@ -21,6 +21,7 @@ import thread
 import time
 import traceback
 
+import conf
 import header
 import method
 import pack
@@ -33,6 +34,14 @@ doesn't support authentication
 """########move from thread spawning to task iteration
 ########slim down code
 ######test everything
+
+global DEFAULT_CONFIG
+DEFAULT_CONFIG = conf.Conf(autosync = False)
+
+for k, v in {"address": ("", 1080), "backlog": 1000, "conn_sleep": 0.001,
+        "conn_inactive": 300, "nthreads": -1, "tcp_buflen": 65536,
+        "timeout": 0.001, "udp_buflen": 512}.items():
+    DEFAULT_CONFIG[k] = v
 
 def server_factory(proto_name, *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
@@ -220,33 +229,21 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             if target_conn:
                 target_conn.close()
 
-class DEFAULT:
-    """global default values (optimized for speed)"""
-    
-    ADDRESS = ("", 1080)
-    BACKLOG = 1000
-    CONN_SLEEP = 0.001
-    CONN_INACTIVE = 300
-    NTHREADS = -1
-    TCP_BUFLEN = 65536
-    TIMEOUT = 0.001
-    UDP_BUFLEN = 512
-
 class Server(threaded.Threaded):
-    """base class for an interruptible server (not exclusively for SOCKS5)"""
+    """
+    base class for an interruptible server (not exclusively for SOCKS5)
+    
+    config is a dict-like object
+    """
     
     def __init__(self, event_handler_class, socket_event_function,
-            socket_type, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.UDP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
-            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
-            timeout = DEFAULT.TIMEOUT):
-        threaded.Threaded.__init__(self, nthreads)
-        self.address = address
+            socket_type, config = DEFAULT_CONFIG):
+        threaded.Threaded.__init__(self)
+
+        for k in ("address", "backlog", "buflen", "conn_inactive",
+                "conn_sleep", "nthreads", "timeout"):
+            setattr(self, k, config[k])
         self.alive = False
-        self.backlog = backlog
-        self.buflen = buflen
-        self.conn_inactive = conn_inactive # inactivity threshold
-        self.conn_sleep = conn_sleep
         self.event_handler_class = event_handler_class
         self.print_lock = thread.allocate_lock() # synchronize printing
         self.sleep = 1.0 / self.backlog # optimal value
@@ -254,10 +251,9 @@ class Server(threaded.Threaded):
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._sock.settimeout(timeout)
+        self._sock.settimeout(self.timeout)
         self.socket_event_function = socket_event_function
         self.socket_type = socket_type
-        self.timeout = timeout
 
     def __call__(self):
         self.alive = True
@@ -383,26 +379,24 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
             self.conn.close()
 
 class TCPServer(Server):
-    def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.TCP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
-            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
-            timeout = DEFAULT.TIMEOUT):
+    def __init__(self, config = DEFAULT_CONFIG):
+        if "tcp_buflen" in config:
+            config["buflen"] = config["tcp_buflen"]
         Server.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
-            socket.SOCK_STREAM, address, backlog, buflen, conn_inactive,
-            conn_sleep, nthreads, timeout)
+            socket.SOCK_STREAM, config)
 
     def __call__(self):
         self._sock.listen(self.backlog)
         Server.__call__(self)
 
 class UDPServer(Server):
-    def __init__(self, address = DEFAULT.ADDRESS, backlog = DEFAULT.BACKLOG,
-            buflen = DEFAULT.UDP_BUFLEN, conn_inactive = DEFAULT.CONN_INACTIVE,
-            conn_sleep = DEFAULT.CONN_SLEEP, nthreads = DEFAULT.NTHREADS,
-            timeout = DEFAULT.TIMEOUT):
-        Server.__init__(self, UDPDatagramHandler, lambda s: s.recvfrom(buflen),
-            socket.SOCK_DGRAM, address, backlog, buflen, conn_inactive,
-            conn_sleep, nthreads, timeout)
+    def __init__(self, config = DEFAULT_CONFIG):
+        if "udp_buflen" in config:
+            config["buflen"] = config["udp_buflen"]
+        Server.__init__(self, UDPDatagramHandler,
+            lambda s: s.recvfrom(config.get("buflen",
+                DEFAULT_CONFIG.UDP_BUFLEN)),
+            socket.SOCK_DGRAM, config)
 
 class UDPDatagramHandler:
     def __init__(self, *args, **kwargs):
@@ -417,12 +411,10 @@ class UDPRequestHandler(BaseUDPRequestHandler):
         raise NotImplementedError()
 
 if __name__ == "__main__":
-    address = DEFAULT.ADDRESS
-    backlog = DEFAULT.BACKLOG
-    buflen = DEFAULT.TCP_BUFLEN
-    conn_inactive = DEFAULT.CONN_INACTIVE
-    conn_sleep = DEFAULT.CONN_SLEEP
-    nthreads = DEFAULT.NTHREADS
-    timeout = DEFAULT.TIMEOUT
-    TCPServer(address, backlog, buflen, conn_inactive, conn_sleep, nthreads,
-        timeout)()
+    config = conf.Conf(autosync = False)
+
+    #mkconfig
+    
+    for k in DEFAULT_CONFIG.keys():
+        config[k] = DEFAULT_CONFIG[k]
+    TCPServer(config)()
