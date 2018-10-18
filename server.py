@@ -21,18 +21,15 @@ import thread
 import time
 import traceback
 
-import authenticator
+import auth
 import conf
 import header
 import method
 import pack
 import threaded
 
-__doc__ = """
-a simple SOCKS5 server framework
-
-doesn't support authentication
-"""########move from thread spawning to task iteration
+__doc__ = """a simple SOCKS5 server framework"""
+########move from thread spawning to task iteration
 ########slim down code
 ######test everything
 
@@ -373,9 +370,9 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
             print "Handling connection from %s:%u" % self.remote
         
         try:
-            wrapped_conn = authenticator.Authenticator(self.conn)()
+            wrapped_conn = auth.Auth(self.conn)()
 
-            if wrapped_conn: # authenticated
+            if wrapped_conn: # authenticated/authorized
                 self.conn = wrapped_conn
                 request_header.fload(self.conn.makefile())
                 

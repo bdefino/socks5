@@ -17,10 +17,10 @@ __package__ = "socks5"
 
 import method
 
-__doc__ = "connection authenticator"
+__doc__ = "connection authenticator/authorization"
 ######implement infrastucture for future use of authentication
 
-class Authenticator:
+class Auth:
     def __init__(self, conn, authenticate = False):
         self.conn = conn
     
@@ -33,3 +33,9 @@ class Authenticator:
         except socket.error:
             return
         return self.conn
+
+class Authenticator:
+    pass
+
+class Authorizer:
+    pass
