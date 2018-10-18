@@ -43,6 +43,19 @@ for k, v in {"address": ("", 1080), "backlog": 1000, "conn_sleep": 0.001,
         "timeout": 0.001, "udp_buflen": 512}.items():
     DEFAULT_CONFIG[k] = v
 
+def open_config(path):
+    """
+    factory function for a server configuration file
+    
+    this turns off autosync and fills in missing configuration values
+    """
+    config = conf.Conf(path, autosync = False)
+
+    for k, v in DEFAULT_CONFIG.items():
+        if not k in config:
+            config[k] = v
+    return config
+
 def server_factory(proto_name, *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
     return {"tcp": TCPServer, "udp": UDPServer}[protocol.strip().lower()](
@@ -402,6 +415,9 @@ class UDPDatagramHandler:
     def __init__(self, *args, **kwargs):
         BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
         self.datagram, self.remote = self.event
+
+    def __call__(self):######################
+        pass
 
 class UDPRequestHandler(BaseUDPRequestHandler):
     def __init__(self, *args, **kwargs):

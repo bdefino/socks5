@@ -24,6 +24,37 @@ __doc__ = "header formats"
 
 class BaseHeader:
     """
+    address manipulation faculties for headers
+
+    shared between TCP and UDP
+    """
+    
+    def __init__(self, addr = "", atyp = 3):
+        self._addr = addr
+        self.atyp = atyp
+
+    def unpack_addr(self):
+        """return the IP address or domain name in *.ADDR"""
+        if not self.atyp == 3: # create a usable address
+            af = socket.AF_INET
+
+            if self.atyp == 4:
+                af = socket.AF_INET6
+            return socket.inet_ntop(af, self._addr)
+        return self._addr
+
+    def update_addrinfo(self):
+        """set ATYP based on *.ADDR"""
+        self.atyp = 3
+
+        if not '.' in self._addr:
+            self.atyp = 1
+
+            if len(self._addr) == 8:
+                self.atyp = 4
+
+class BaseTCPHeader(BaseHeader):
+    """
     the contents of addr, port, and special vary between a reply and request;
     their internal values (_addr, _port, and _special) should be managed by
     subclasses
@@ -35,8 +66,7 @@ class BaseHeader:
     
     def __init__(self, addr = "", atyp = 3, port = 0, rsv = 0, special = 0,
             ver = 5):
-        self._addr = addr
-        self.atyp = atyp
+        BaseHeader.__init__(self, addr, atyp)
         self._port = port
         self.rsv = rsv
         self._special = special
@@ -70,27 +100,60 @@ class BaseHeader:
         header.append(pack.pack(self._port, 2))
         return "".join(header)
 
-    def unpack_addr(self):
-        """return the IP address or domain name in *.ADDR"""
-        if not self.atyp == 3: # create a usable address
-            af = socket.AF_INET
+class BaseUDPHeader(BaseHeader):
+    """
+      +----+------+------+----------+----------+----------+
+      |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
+      +----+------+------+----------+----------+----------+
+      | 2  |  1   |  1   | Variable |    2     | Variable |
+      +----+------+------+----------+----------+----------+
 
-            if self.atyp == 4:
-                af = socket.AF_INET6
-            return socket.inet_ntop(af, self._addr)
-        return self._addr
+     The fields in the UDP request header are:
 
-    def update_addrinfo(self):
-        """set ATYP based on *.ADDR"""
-        self.atyp = 3
+          o  RSV  Reserved X'0000'
+          o  FRAG    Current fragment number
+          o  ATYP    address type of following addresses:
+             o  IP V4 address: X'01'
+             o  DOMAINNAME: X'03'
+             o  IP V6 address: X'04'
+          o  DST.ADDR       desired destination address
+          o  DST.PORT       desired destination port
+          o  DATA     user data # NOT PART OF THE HEADER
+    """
 
-        if not '.' in self._addr:
-            self.atyp = 1
+    def __init__(self, addr = "", atyp = 3, frag = 0, port = 0, rsv = 0):
+        BaseHeader.__init__(self, addr, atyp)
+        self.frag = frag
+        self._port = port
+        self.rsv = rsv
 
-            if len(self._addr) == 8:
-                self.atyp = 4
+    def fload(self, fp):
+        """load from a file-like object"""
+        self.rsv = pack.unpack(fp.read(2))
+        self.frag = pack.unpack(fp.read(1))
+        self.atyp = pack.unpack(fp.read(1))
 
-class ReplyHeader(BaseHeader):
+        if self.atyp == 1:
+            self._addr = fp.read(4)
+        elif self.atyp == 3:
+            self._addr = fp.read(pack.unpack(fp.read(1)))
+        elif self.atyp == 4:
+            self._addr = fp.read(16)
+        self._port = fp.read(2)
+
+    def __str__(self):
+        header = [pack.pack(self.rsv, 2), pack.pack(self.frag, 1),
+            pack.pack(self.atyp, 1)]
+
+        if self.atyp == 3:
+            for e in (pack.pack(len(self._addr), 1), self._addr):
+                header.append(e)
+        else:
+            header.append(self._addr)
+        header.append(pack.pack(self._port, 2))
+        return "".join(header)
+
+class ReplyHeader(BaseTCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -125,7 +188,7 @@ class ReplyHeader(BaseHeader):
     
     def __init__(self, atyp = 3, bnd_addr = "", bnd_port = 0, rep = 0, rsv = 0,
             ver = 5):
-        BaseHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
+        BaseTCPHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -168,7 +231,7 @@ class ReplyHeader(BaseHeader):
         self._port = self.bnd_port
         BaseHeader.update_addrinfo(self)
 
-class RequestHeader(BaseHeader):
+class RequestHeader(BaseTCPHeader):
     """
     The SOCKS request is formed as follows:
 
@@ -197,7 +260,7 @@ class RequestHeader(BaseHeader):
     
     def __init__(self, atyp = 3, cmd = 1, dst_addr = "", dst_port = 0, rsv = 0,
             ver = 5):
-        BaseHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
+        BaseTCPHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
