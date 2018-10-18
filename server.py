@@ -21,6 +21,7 @@ import thread
 import time
 import traceback
 
+import authenticator
 import conf
 import header
 import method
@@ -60,6 +61,54 @@ def server_factory(proto_name, *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
     return {"tcp": TCPServer, "udp": UDPServer}[protocol.strip().lower()](
         *args, **kwargs)
+
+class BaseServer(threaded.Threaded):
+    """
+    base class for an interruptible server (not exclusively for SOCKS5)
+    
+    config is a dict-like object
+    """
+    
+    def __init__(self, event_handler_class, socket_event_function,
+            socket_type, config = DEFAULT_CONFIG):
+        threaded.Threaded.__init__(self)
+
+        for k in ("address", "backlog", "buflen", "conn_inactive",
+                "conn_sleep", "nthreads", "timeout"):
+            setattr(self, k, config[k])
+        self.alive = False
+        self.event_handler_class = event_handler_class
+        self.print_lock = thread.allocate_lock() # synchronize printing
+        self.sleep = 1.0 / self.backlog # optimal value
+        self._sock = socket.socket(socket.AF_INET, socket_type)
+        self._sock.bind(self.address)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self._sock.settimeout(self.timeout)
+        self.socket_event_function = socket_event_function
+        self.socket_type = socket_type
+
+    def __call__(self):
+        self.alive = True
+        
+        with self.print_lock:
+            print "Started server on %s:%u" % self.address
+        
+        try:
+            while 1:
+                try:
+                    self.allocate_thread(self.event_handler_class(
+                        self.socket_event_function(self._sock), self).__call__)
+                except socket.error:
+                    pass
+                time.sleep(self.sleep)
+        except KeyboardInterrupt:
+            self.alive = False
+        finally:
+            with self.print_lock:
+                print "Shutting down server..."
+            self._sock.shutdown(socket.SHUT_RDWR)
+            self._sock.close()
 
 class BaseServerSpawnedEventHandler:
     """
@@ -161,8 +210,8 @@ class BindRequestHandler(BaseTCPRequestHandler):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):
-        conn_reply = header.ReplyHeader()
-        server_reply = header.ReplyHeader()
+        conn_reply = header.TCPReplyHeader()
+        server_reply = header.TCPReplyHeader()
         server_sock = None
         start = time.time()
         target_conn = None
@@ -221,7 +270,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)
 
     def __call__(self):
-        reply = header.ReplyHeader()
+        reply = header.TCPReplyHeader()
         target_conn = None
 
         try:
@@ -241,54 +290,6 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
         finally:
             if target_conn:
                 target_conn.close()
-
-class Server(threaded.Threaded):
-    """
-    base class for an interruptible server (not exclusively for SOCKS5)
-    
-    config is a dict-like object
-    """
-    
-    def __init__(self, event_handler_class, socket_event_function,
-            socket_type, config = DEFAULT_CONFIG):
-        threaded.Threaded.__init__(self)
-
-        for k in ("address", "backlog", "buflen", "conn_inactive",
-                "conn_sleep", "nthreads", "timeout"):
-            setattr(self, k, config[k])
-        self.alive = False
-        self.event_handler_class = event_handler_class
-        self.print_lock = thread.allocate_lock() # synchronize printing
-        self.sleep = 1.0 / self.backlog # optimal value
-        self._sock = socket.socket(socket.AF_INET, socket_type)
-        self._sock.bind(self.address)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._sock.settimeout(self.timeout)
-        self.socket_event_function = socket_event_function
-        self.socket_type = socket_type
-
-    def __call__(self):
-        self.alive = True
-        
-        with self.print_lock:
-            print "Serving SOCKS5 requests on %s:%u" % self.address
-        
-        try:
-            while 1:
-                try:
-                    self.allocate_thread(self.event_handler_class(
-                        self.socket_event_function(self._sock), self).__call__)
-                except socket.error:
-                    pass
-                time.sleep(self.sleep)
-        except KeyboardInterrupt:
-            self.alive = False
-        finally:
-            with self.print_lock:
-                print "Shutting down SOCKS5 server..."
-            self._sock.shutdown(socket.SHUT_RDWR)
-            self._sock.close()
 
 class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     """
@@ -314,7 +315,7 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
 
     def __call__(self):
         bound = False
-        reply = header.ReplyHeader()
+        reply = header.TCPReplyHeader()
         server_sock = None
         target_address = (request.unpack_addr(), request.dst_port)
         
@@ -366,18 +367,20 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
     def __call__(self):
         fp = self.conn.makefile()
         method_query = method.MethodQuery()
-        request_header = header.RequestHeader()
+        request_header = header.TCPRequestHeader()
         
         with self.server.print_lock:
             print "Handling connection from %s:%u" % self.remote
         
         try:
-            method_query.fload(fp)
-            self.conn.sendall(str(method.MethodResponse())) # no authentication
-            request_header.fload(fp)
-            
-            TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
-                request_header, self.event, self.server)()
+            wrapped_conn = authenticator.Authenticator(self.conn)()
+
+            if wrapped_conn: # authenticated
+                self.conn = wrapped_conn
+                request_header.fload(self.conn.makefile())
+                
+                TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
+                    request_header, self.event, self.server)()
         except KeyError: # command not supported
             try:
                 self.conn.sendall(str(header.ReplyHeader(rep = 7)))
@@ -391,25 +394,16 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
                 print "Closing connection with %s:%u" % self.remote
             self.conn.close()
 
-class TCPServer(Server):
+class Server(BaseServer):
     def __init__(self, config = DEFAULT_CONFIG):
         if "tcp_buflen" in config:
             config["buflen"] = config["tcp_buflen"]
-        Server.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
+        BaseServer.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
             socket.SOCK_STREAM, config)
 
     def __call__(self):
         self._sock.listen(self.backlog)
-        Server.__call__(self)
-
-class UDPServer(Server):
-    def __init__(self, config = DEFAULT_CONFIG):
-        if "udp_buflen" in config:
-            config["buflen"] = config["udp_buflen"]
-        Server.__init__(self, UDPDatagramHandler,
-            lambda s: s.recvfrom(config.get("buflen",
-                DEFAULT_CONFIG.UDP_BUFLEN)),
-            socket.SOCK_DGRAM, config)
+        BaseServer.__call__(self)
 
 class UDPDatagramHandler:
     def __init__(self, *args, **kwargs):
@@ -428,9 +422,9 @@ class UDPRequestHandler(BaseUDPRequestHandler):
 
 if __name__ == "__main__":
     config = conf.Conf(autosync = False)
-
+    
     #mkconfig
     
     for k in DEFAULT_CONFIG.keys():
         config[k] = DEFAULT_CONFIG[k]
-    TCPServer(config)()
+    Server(config)()

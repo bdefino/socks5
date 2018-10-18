@@ -120,7 +120,7 @@ class BaseUDPHeader(BaseHeader):
           o  DST.PORT       desired destination port
           o  DATA     user data # NOT PART OF THE HEADER
     """
-
+    
     def __init__(self, addr = "", atyp = 3, frag = 0, port = 0, rsv = 0):
         BaseHeader.__init__(self, addr, atyp)
         self.frag = frag
@@ -153,7 +153,7 @@ class BaseUDPHeader(BaseHeader):
         header.append(pack.pack(self._port, 2))
         return "".join(header)
 
-class ReplyHeader(BaseTCPHeader):
+class TCPReplyHeader(BaseTCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -192,7 +192,6 @@ class ReplyHeader(BaseTCPHeader):
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
-        BaseHeader.update_addrinfo(self)
 
     def errno(self, e):########################
         """
@@ -209,7 +208,7 @@ class ReplyHeader(BaseTCPHeader):
 
     def fload(self, fp):
         """load from a file-like object"""
-        BaseHeader.fload(self, fp)
+        BaseTCPHeader.fload(self, fp)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -217,24 +216,22 @@ class ReplyHeader(BaseTCPHeader):
     def __str__(self):
         self._special = self.rep
         self.update_addrinfo()
-        return BaseHeader.__str__(self)
+        return BaseTCPHeader.__str__(self)
 
     def unpack_addr(self):
         """return the IP address or domain name in BND.ADDR"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        return BaseHeader.unpack_addr(self)
+        return BaseTCPHeader.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        BaseHeader.update_addrinfo(self)
+        BaseTCPHeader.update_addrinfo(self)
 
-class RequestHeader(BaseTCPHeader):
+class TCPRequestHeader(BaseTCPHeader):
     """
-    The SOCKS request is formed as follows:
-
         +----+-----+-------+------+----------+----------+
         |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
         +----+-----+-------+------+----------+----------+
@@ -267,7 +264,7 @@ class RequestHeader(BaseTCPHeader):
 
     def fload(self, fp):
         """load from a file-like object"""
-        BaseHeader.fload(self, fp)
+        BaseTCPHeader.fload(self, fp)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
@@ -275,16 +272,22 @@ class RequestHeader(BaseTCPHeader):
     def __str__(self):
         self._special = self.cmd
         self.update_addrinfo()
-        return BaseHeader.__str__(self)
+        return BaseTCPHeader.__str__(self)
 
     def unpack_dst_addr(self):
         """return the IP address of domain name in DST.ADDR"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        return BaseHeader.unpack_addr(self)
+        return BaseTCPHeader.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        BaseHeader.update_addrinfo(self)
+        BaseTCPHeader.update_addrinfo(self)
+
+class UDPHeader(BaseUDPHeader):
+    """alias for BaseUDPHeader"""
+    
+    def __init__(self, *args, **kwargs):
+        BaseUDPHeader.__init__(self, *args, **kwargs)
