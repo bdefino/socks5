@@ -32,6 +32,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ########move from thread spawning to task iteration
 ########slim down code
 ######test everything
+#######play with sleep values
 
 global DEFAULT_CONFIG
 DEFAULT_CONFIG = conf.Conf(autosync = False)
