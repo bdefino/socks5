@@ -291,7 +291,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
             server_reply.bnd_addr, server_reply.bnd_port \
                 = server_sock.getsockname()
         except socket.error as e:
-            server_reply.errno(e.args[0])
+            server_reply.errno(e.args[0], bind = True)
         
         try:
             self.conn.settimeout(self.server.timeout)
@@ -303,7 +303,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
                     conn_reply.bnd_addr, conn_reply.bnd_port \
                         = target_remote
                 except socket.error as e:
-                    conn_reply.errno(e.args[0])
+                    conn_reply.errno(e.args[0], accept = True)
 
             if server_sock: # close the server ASAP
                 server_sock.close()
@@ -343,7 +343,7 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
                 self.request_header.dst_port), self.server.conn_inactive)
             reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
         except socket.error as e:
-            reply.errno(e.args[0])
+            reply.errno(e.args[0], connect = True)
         
         try:
             self.conn.settimeout(self.server.timeout)
@@ -403,7 +403,7 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
             server_sock.settimeout(self.server.timeout)
             reply.bnd_addr, reply.bnd_port = server_sock.getpeername()
         except socket.error as e:
-            reply.errno(e.args[0])
+            reply.errno(e.args[0], bind = True)
         
         try:
             self.conn.settimeout(self.server.timeout)

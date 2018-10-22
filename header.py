@@ -208,19 +208,28 @@ class TCPReplyHeader(BaseTCPHeader):
         self.bnd_port = self._port
         self.rep = self._special
 
-    def errno(self, e):########################
+    def errno(self, e, accept = False, bind = False, connect = False):
         """
-        set REP based on the error number
+        set REP based on the error number and the operation
 
-        unknown errors are identified as "general SOCKS server failure"
+        only one operation (accept, bind, connect) may be set
 
-        this doesn't cover "connection not allowed by ruleset"
+        when an unknown error is present and connect evaluates to True,
+        the error is identified as "connection not allowed by ruleset"
+        
+        otherwised, unknown errors are identified as
+        "general SOCKS server failure"
         """
+        if sum((1 for e in (accept, bind, connect) if e)) > 1:
+            raise ValueError("multiple socket operations specified")
         self.rep = 1
+
+        if connect:
+            self.rep = 2
         
         if e in ReplyHeader.ERRNO_TO_REP:
             self.rep = ReplyHeader.ERRNO_TO_REP[e]
-
+    
     def fload(self, fp):
         """load from a file-like object"""
         BaseTCPHeader.fload(self, fp)
