@@ -15,10 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
-import auth
-import client
-import header
-import method
-import server
+class BaseError(RuntimeError):
+    pass
 
-__doc__ = "a simple RFC 1928-compliant SOCKS5 library"
+class ProtocolError(BaseError):
+    pass

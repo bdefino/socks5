@@ -23,6 +23,7 @@ import traceback
 
 import auth
 import conf
+import errors
 import header
 import method
 import pack
@@ -289,6 +290,20 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             if target_conn:
                 target_conn.close()
 
+class Server(BaseServer):
+    def __init__(self, config = DEFAULT_CONFIG):
+        if "tcp_buflen" in config:
+            config["buflen"] = config["tcp_buflen"]
+        BaseServer.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
+            socket.SOCK_STREAM, config)
+
+    def __call__(self):
+        self._sock.listen(self.backlog)
+        BaseServer.__call__(self)
+
+class ServerError(errors.BaseError):
+    pass
+
 class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     """
     The UDP ASSOCIATE request is used to establish an association within
@@ -391,17 +406,6 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
             with self.server.print_lock:
                 print "Closing connection with %s:%u" % self.remote
             self.conn.close()
-
-class Server(BaseServer):
-    def __init__(self, config = DEFAULT_CONFIG):
-        if "tcp_buflen" in config:
-            config["buflen"] = config["tcp_buflen"]
-        BaseServer.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
-            socket.SOCK_STREAM, config)
-
-    def __call__(self):
-        self._sock.listen(self.backlog)
-        BaseServer.__call__(self)
 
 class UDPDatagramHandler:
     def __init__(self, *args, **kwargs):

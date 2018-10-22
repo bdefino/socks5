@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
+import errors
 import method
 
 __doc__ = "connection authenticator/authorization"
@@ -33,6 +34,9 @@ class Auth:
         except socket.error:
             return
         return self.conn
+
+class AuthError(errors.BaseError):
+    pass
 
 class Authenticator:
     pass

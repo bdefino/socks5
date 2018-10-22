@@ -18,9 +18,16 @@ __package__ = "socks5"
 import errno
 import socket
 
+import errors
 import pack
 
 __doc__ = "header formats"
+
+def response_error_factory(rep):
+    """return a ResponseError based on REP"""
+    if rep in ResponseError.REP_TO_MSG:
+        return ResponseError(ResponseError.REP_TO_MSG[c])
+    return
 
 class BaseHeader:
     """
@@ -152,6 +159,14 @@ class BaseUDPHeader(BaseHeader):
             header.append(self._addr)
         header.append(pack.pack(self._port, 2))
         return "".join(header)
+
+class ResponseError(errors.ProtocolError):
+    REP_TO_MSG = {1: "general SOCKS server failure",
+        2: "connection not allowed by ruleset", 3: "Network unreachable",
+        4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",
+        7: "Command not supported", 8: "Address type not supported"}
+    
+    pass
 
 class TCPReplyHeader(BaseTCPHeader):
     """
