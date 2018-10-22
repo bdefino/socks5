@@ -27,11 +27,20 @@ def create_connection(*args, **kwargs):
     """create a SOCKS5 connection"""
     return wrap(socket.create_connection(*args, **kwargs))
 
-def wrap(sock):#########################
-    """wrap a socket with SOCKS5"""
-    pass
+def wrap(sock):
+    """wrap a socket with SOCKS5 (not actually wrapping)"""
+    wrapped = Client()
+    wrapped.close() # free up the unused socket
+    wrapped._sock = sock._sock # share the resources
+
+    for method in socket._delegate_methods:
+        if not method in Client.__all__: # preserve SOCKS5 overrides
+            setattr(wrapped, method, getattr(wrapped._sock, method))
+    return wrapped
 
 class Client(socket.socket):
+    __all__ = ["__init__", "connect"]
+    
     def __init__(self, *args, **kwargs):
         socket.socket.__init__(self, *args, **kwargs)
 
@@ -40,19 +49,23 @@ class Client(socket.socket):
         establish a SOCKS5 control connection,
         and return the ResponseHeader or optionally complain
         """
+        response_header = header.TCPResponseHeader()
         socket.socket.connect(self, address)
 
         if not request_header:
-            request_header = header.RequestHeader()
+            request_header = header.TCPRequestHeader()
         self.sendall(str(request_header))
         
         try:
-            response_header = self.recv(len(request_header))
-        except socket.error as e:
+            response_header.fload(self)
+        except (errors.ProtocolError, socket.error) as e:
             self.close()
 
             if complain:
-                raise ClientError(*e.args)
+                raise e
+
+            if isinstance(e, socket.timeout): # no complaint, but no response
+                response_header = None
         return response_header
 
 class ClientError(errors.SOCKS5Error):
