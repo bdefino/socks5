@@ -34,6 +34,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
 ######test everything
 #######play with sleep values
+#######server shouldn't just have a socket, it should BE one
 
 global DEFAULT_CONFIG
 DEFAULT_CONFIG = conf.Conf(autosync = False)
@@ -301,7 +302,7 @@ class Server(BaseServer):
         self._sock.listen(self.backlog)
         BaseServer.__call__(self)
 
-class ServerError(errors.BaseError):
+class ServerError(errors.SOCKS5Error):
     pass
 
 class UDPAssociateRequestHandler(BaseTCPRequestHandler):

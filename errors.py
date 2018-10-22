@@ -15,8 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
-class BaseError(RuntimeError):
+class SOCKS5Error(RuntimeError):
     pass
 
-class ProtocolError(BaseError):
+class ProtocolError(SOCKS5Error):
     pass

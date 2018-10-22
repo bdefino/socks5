@@ -35,7 +35,7 @@ class Auth:
             return
         return self.conn
 
-class AuthError(errors.BaseError):
+class AuthError(errors.SOCKS5Error):
     pass
 
 class Authenticator:

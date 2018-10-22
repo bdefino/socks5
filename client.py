@@ -23,33 +23,37 @@ import header
 
 __doc__ = "a simple SOCKS5 client"
 
-def socket(address, *sock_args, **sock_kwargs):
-    pass
+def create_connection(*args, **kwargs):
+    """create a SOCKS5 connection"""
+    return wrap(socket.create_connection(*args, **kwargs))
 
-def wrap(sock):
+def wrap(sock):#########################
+    """wrap a socket with SOCKS5"""
     pass
 
 class Client(socket.socket):
     def __init__(self, *args, **kwargs):
         socket.socket.__init__(self, *args, **kwargs)
 
-    def connect(self, address, request_header = None):
+    def connect(self, address, request_header = None, complain = True):
+        """
+        establish a SOCKS5 control connection,
+        and return the ResponseHeader or optionally complain
+        """
         socket.socket.connect(self, address)
 
         if not request_header:
             request_header = header.RequestHeader()
         self.sendall(str(request_header))
-
+        
         try:
             response_header = self.recv(len(request_header))
-        except socket.timeout:
-            response_header = None
         except socket.error as e:
             self.close()
-            raise e
 
-        if response_header and response_header.rep:
-            raise 
+            if complain:
+                raise ClientError(*e.args)
+        return response_header
 
-class ClientError(errors.BaseError):
+class ClientError(errors.SOCKS5Error):
     pass
