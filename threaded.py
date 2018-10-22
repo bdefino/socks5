@@ -108,15 +108,18 @@ class Iterative(Threaded):
         self._alive_lock = thread.allocate_lock()
         self._input_queue = Queue.Queue()
         self.sleep = sleep
-
-        # don't change behavior to match changes in self.nthreads
         
         if self.nthreads > 0:
             for n in range(self.nthreads):
                 thread.start_new_thread(self._slave, ())
-        else: # use base behavior
-            self.execute = lambda *a, **k: Threaded.execute(self, *a, **k)
 
+    def execute(self, func, *args, **kwargs):
+        """add the task to the queue"""
+        if self.nthreads > 0:
+            self._input_queue.put(FuncInfo(func, None, *args, **kwargs))
+        else: # use default behavior
+            Threaded.execute(self, func, *args, **kwargs)
+    
     def kill_all(self):
         """passively attempt to kill all the threads"""
         with self._alive_lock:
@@ -144,7 +147,3 @@ class Iterative(Threaded):
 
                 if isinstance(self.output_queue, Queue.Queue):
                     self.output_queue.put(funcinfo)
-
-    def task(self, func, *args, **kwargs):
-        """add the task to the queue"""
-        self._input_queue.put(FuncInfo(func, None, *args, **kwargs))

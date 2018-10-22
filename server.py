@@ -30,10 +30,10 @@ import pack
 import threaded
 
 __doc__ = """a simple SOCKS5 server framework"""
-########move from thread spawning to task iteration
 ########slim down code
 ######test everything
 #######play with sleep values
+########integrate CLI
 
 def open_config(path):
     """
@@ -218,8 +218,8 @@ class BaseTCPServer(socket.socket, threaded.Threaded):
         try:
             while 1:
                 try:
-                    self.allocate_thread(self.event_handler_class(
-                        self.accept(), self).__call__)
+                    self.execute(self.event_handler_class( self.accept(),
+                        self).__call__)
                 except socket.error:
                     pass
                 time.sleep(self.sleep)
