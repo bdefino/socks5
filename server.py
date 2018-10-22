@@ -36,11 +36,23 @@ __doc__ = """a simple SOCKS5 server framework"""
 #######play with sleep values
 #######server shouldn't just have a socket, it should BE one
 
+global ADDRESS
+ADDRESS = ":1080"
+
+global AF
+AF = socket.AF_INET # latest address family
+
+for addrinfo in socket.getaddrinfo(None, 0):
+    ADDRESS = ','.join([str(addrinfo[4][0]), "1080"]
+        + [str(e) for e in addrinfo[4][2:]])
+    AF = addrinfo[0]
+    break
+
 global DEFAULT_CONFIG
 DEFAULT_CONFIG = conf.Conf(autosync = False)
 
-for k, v in {"address": ("", 1080), "backlog": 1000, "conn_sleep": 0.001,
-        "conn_inactive": 300, "nthreads": -1, "tcp_buflen": 65536,
+for k, v in {"address": ADDRESS, "af": AF, "backlog": 1000, "buflen": 65536,
+        "conn_sleep": 0.001, "conn_inactive": 300, "nthreads": -1,
         "timeout": 0.001, "udp_buflen": 512}.items():
     DEFAULT_CONFIG[k] = v
 
@@ -57,10 +69,61 @@ def open_config(path):
             config[k] = v
     return config
 
+def parse_sockaddr(sockaddr, af = None):
+    """
+    parse a socket address string
+
+    for AF_INET, this is: DOMAIN:PORT
+
+    for AF_INET6, this is: DOMAIN,PORT,FLOW INFO,SCOPE ID
+    """
+    if af == None:
+        af = socket.AF_INET
+        
+        if ',' in sockaddr:
+            af = socket.AF_INET6
+    parsed = ()
+    
+    if af == socket.AF_INET:
+        parsed = sockaddr.split(':', 1)
+    elif af == socket.AF_INET6:
+        parsed = sockaddr.split(',', 3)
+    else:
+        raise ValueError("unknown address family")
+    
+    try:
+        for i in range(1, len(parsed)):
+            parsed[i] = int(parsed[i])
+    except (IndexError, ValueError):
+        raise ValueError("invalid socket address string")
+    return tuple(parsed)
+
 def server_factory(proto_name, *args, **kwargs):
     """factory function for a protocol-specific SOCKS5 server"""
     return {"tcp": TCPServer, "udp": UDPServer}[protocol.strip().lower()](
         *args, **kwargs)
+
+def str_addr(addr, af = None):
+    """
+    convert an address to  string
+
+    see parse_sockaddr for the formats
+    """
+    if af == None:
+        if len(addr) == 2:
+            af = socket.AF_INET
+        elif len(addr) == 4:
+            af = socket.AF_INET6
+    
+    if af == socket.AF_INET:
+        if len(addr) == 2:
+            return ':'.join((str(e) for e in addr[:2]))
+        raise ValueError("invalid AF_INET address")
+    elif af == socket.AF_INET6:
+        if len(addr) == 4:
+            return ','.join((str(e) for e in addr[:4]))
+        raise ValueError("invalid AF_INET6 address")
+    raise ValueError("unknown address family")
 
 class BaseServer(threaded.Threaded):
     """
@@ -70,29 +133,30 @@ class BaseServer(threaded.Threaded):
     """
     
     def __init__(self, event_handler_class, socket_event_function,
-            socket_type, config = DEFAULT_CONFIG):
+            config = DEFAULT_CONFIG):
         threaded.Threaded.__init__(self)
-
-        for k in ("address", "backlog", "buflen", "conn_inactive",
-                "conn_sleep", "nthreads", "timeout"):
-            setattr(self, k, config[k])
+        
+        for k, f in (("address", parse_sockaddr), ("af", int),
+                ("backlog", int), ("buflen", int), ("conn_inactive", float),
+                ("conn_sleep", float), ("nthreads", int), ("timeout", float)):
+            setattr(self, k, f(config[k]))
         self.alive = False
+        self.config = config
         self.event_handler_class = event_handler_class
         self.print_lock = thread.allocate_lock() # synchronize printing
         self.sleep = 1.0 / self.backlog # optimal value
-        self._sock = socket.socket(socket.AF_INET, socket_type)
+        self._sock = socket.socket(self.af, socket.SOCK_STREAM)
         self._sock.bind(self.address)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._sock.settimeout(self.timeout)
         self.socket_event_function = socket_event_function
-        self.socket_type = socket_type
 
     def __call__(self):
         self.alive = True
         
         with self.print_lock:
-            print "Started server on %s:%u" % self.address
+            print "Started server on", str_addr(self.address)
         
         try:
             while 1:
@@ -218,7 +282,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
         target_remote = None
         
         try:
-            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server_sock = socket.socket(self.server.af, socket.SOCK_STREAM)
             server_sock.bind((self.request.unpack_addr(), 0))
             server_sock.listen(1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -293,10 +357,8 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
 
 class Server(BaseServer):
     def __init__(self, config = DEFAULT_CONFIG):
-        if "tcp_buflen" in config:
-            config["buflen"] = config["tcp_buflen"]
         BaseServer.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
-            socket.SOCK_STREAM, config)
+            config)
 
     def __call__(self):
         self._sock.listen(self.backlog)
@@ -334,7 +396,7 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
         target_address = (request.unpack_addr(), request.dst_port)
         
         try:
-            server_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            server_sock = socket.socket(self.server.af, socket.SOCK_DGRAM)
             server_sock.bind((self.request.unpack_addr(), 0))
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -384,7 +446,7 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
         request_header = header.TCPRequestHeader()
         
         with self.server.print_lock:
-            print "Handling connection from %s:%u" % self.remote
+            print "Handling connection from", str_addr(self.remote)
         
         try:
             wrapped_conn = auth.Auth(self.conn)()
@@ -405,7 +467,7 @@ class TCPConnectionHandler(BaseServerSpawnedEventHandler):
                 print >> sys.stderr, traceback.format_exc()
         finally:
             with self.server.print_lock:
-                print "Closing connection with %s:%u" % self.remote
+                print "Closing connection with", str_addr(self.remote)
             self.conn.close()
 
 class UDPDatagramHandler:
@@ -430,4 +492,6 @@ if __name__ == "__main__":
     
     for k in DEFAULT_CONFIG.keys():
         config[k] = DEFAULT_CONFIG[k]
+    #config["address"] = ":1080"
+    #config["af"] = socket.AF_INET
     Server(config)()
