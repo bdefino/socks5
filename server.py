@@ -34,27 +34,6 @@ __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
 ######test everything
 #######play with sleep values
-#######server shouldn't just have a socket, it should BE one
-
-global ADDRESS
-ADDRESS = ":1080"
-
-global AF
-AF = socket.AF_INET # latest address family
-
-for addrinfo in socket.getaddrinfo(None, 0):
-    ADDRESS = ','.join([str(addrinfo[4][0]), "1080"]
-        + [str(e) for e in addrinfo[4][2:]])
-    AF = addrinfo[0]
-    break
-
-global DEFAULT_CONFIG
-DEFAULT_CONFIG = conf.Conf(autosync = False)
-
-for k, v in {"address": ADDRESS, "af": AF, "backlog": 1000, "buflen": 65536,
-        "conn_sleep": 0.001, "conn_inactive": 300, "nthreads": -1,
-        "timeout": 0.001, "udp_buflen": 512}.items():
-    DEFAULT_CONFIG[k] = v
 
 def open_config(path):
     """
@@ -125,55 +104,6 @@ def str_addr(addr, af = None):
         raise ValueError("invalid AF_INET6 address")
     raise ValueError("unknown address family")
 
-class BaseServer(threaded.Threaded):
-    """
-    base class for an interruptible server (not exclusively for SOCKS5)
-    
-    config is a dict-like object
-    """
-    
-    def __init__(self, event_handler_class, socket_event_function,
-            config = DEFAULT_CONFIG):
-        threaded.Threaded.__init__(self)
-        
-        for k, f in (("address", parse_sockaddr), ("af", int),
-                ("backlog", int), ("buflen", int), ("conn_inactive", float),
-                ("conn_sleep", float), ("nthreads", int), ("timeout", float)):
-            setattr(self, k, f(config[k]))
-        self.alive = False
-        self.config = config
-        self.event_handler_class = event_handler_class
-        self.print_lock = thread.allocate_lock() # synchronize printing
-        self.sleep = 1.0 / self.backlog # optimal value
-        self._sock = socket.socket(self.af, socket.SOCK_STREAM)
-        self._sock.bind(self.address)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self._sock.settimeout(self.timeout)
-        self.socket_event_function = socket_event_function
-
-    def __call__(self):
-        self.alive = True
-        
-        with self.print_lock:
-            print "Started server on", str_addr(self.address)
-        
-        try:
-            while 1:
-                try:
-                    self.allocate_thread(self.event_handler_class(
-                        self.socket_event_function(self._sock), self).__call__)
-                except socket.error:
-                    pass
-                time.sleep(self.sleep)
-        except KeyboardInterrupt:
-            self.alive = False
-        finally:
-            with self.print_lock:
-                print "Shutting down server..."
-            self._sock.shutdown(socket.SHUT_RDWR)
-            self._sock.close()
-
 class BaseServerSpawnedEventHandler:
     """
     allows an event handler to access the server
@@ -208,13 +138,17 @@ class BaseTCPRequestHandler(BaseRequestHandler):
         except socket.error:
             pass
         
-        while self.server.alive and _continue:
+        while _continue:
+            with self.server._alive_lock:
+                if not self.server.alive:
+                    break
+            
             for a, b in ((other_conn, self.conn), (self.conn, other_conn)):
                 chunk = ""
                 time.sleep(self.server.conn_sleep)
                 
                 try:
-                    chunk = a.recv(self.server.buflen)
+                    chunk = a.recv(self.server.tcp_buflen)
                     last = time.time()
                 except socket.timeout:
                     if time.time() - last >= self.server.conn_inactive:
@@ -236,6 +170,67 @@ class BaseTCPRequestHandler(BaseRequestHandler):
 
                 if not _continue:
                     break
+
+class BaseTCPServer(socket.socket, threaded.Threaded):
+    """base class for an interruptible TCP server socket"""
+    
+    def __init__(self, event_handler_class, address = None, backlog = 1000,
+            conn_inactive = 300, conn_sleep = 0.001, nthreads = -1,
+            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+        if not address:
+            address = ("", 1080)
+
+            for addrinfo in socket.getaddrinfo(None, 1080):
+                address = addrinfo[4]
+                break
+        af = socket.AF_INET # determine the address family
+
+        if len(address) == 4:
+            af = socket.AF_INET6
+        elif not len(address) == 2:
+            raise ValueError("unknown address family")
+        socket.socket.__init__(self, af, socket.SOCK_STREAM)
+        threaded.Threaded.__init__(self, nthreads)
+        self.address = address
+        self.alive = True
+        self._alive_lock = thread.allocate_lock()
+        self.backlog = backlog
+        self.config = config
+        self.conn_inactive = conn_inactive
+        self.conn_sleep = conn_sleep
+        self.event_handler_class = event_handler_class
+        self.print_lock = thread.allocate_lock() # synchronize printing
+        self.sleep = 1.0 / self.backlog # optimal value
+        self.bind(self.address)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self.settimeout(timeout)
+        self.tcp_buflen = tcp_buflen
+        self.timeout = timeout
+        self.udp_buflen = udp_buflen
+
+    def __call__(self):
+        self.listen(self.backlog)
+        
+        with self.print_lock:
+            print "Started server on", str_addr(self.address)
+        
+        try:
+            while 1:
+                try:
+                    self.allocate_thread(self.event_handler_class(
+                        self.accept(), self).__call__)
+                except socket.error:
+                    pass
+                time.sleep(self.sleep)
+        except KeyboardInterrupt:
+            with self._alive_lock:
+                self.alive = False
+        finally:
+            with self.print_lock:
+                print "Shutting down server..."
+            self.shutdown(socket.SHUT_RDWR)
+            self.close()
 
 class BaseUDPRequestHandler(BaseRequestHandler):
     def __init__(self, *args, **kwargs):
@@ -355,14 +350,9 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             if target_conn:
                 target_conn.close()
 
-class Server(BaseServer):
-    def __init__(self, config = DEFAULT_CONFIG):
-        BaseServer.__init__(self, TCPConnectionHandler, lambda s: s.accept(),
-            config)
-
-    def __call__(self):
-        self._sock.listen(self.backlog)
-        BaseServer.__call__(self)
+class Server(BaseTCPServer):
+    def __init__(self, **config):
+        BaseTCPServer.__init__(self, TCPConnectionHandler, **config)
 
 class ServerError(errors.SOCKS5Error):
     pass
@@ -490,8 +480,8 @@ if __name__ == "__main__":
     
     #mkconfig
     
-    for k in DEFAULT_CONFIG.keys():
-        config[k] = DEFAULT_CONFIG[k]
-    #config["address"] = ":1080"
-    #config["af"] = socket.AF_INET
-    Server(config)()
+    if not set(config.keys()).issubset(set(("address", "backlog",
+            "conn_inactive", "conn_sleep", "nthreads", "tcp_buflen", "timeout",
+            "udp_buflen"))):##############gross
+        raise KeyError("detected invalid keys")
+    Server(**config)()
