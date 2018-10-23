@@ -246,11 +246,9 @@ class PipeHandler(baseserver.eventhandler.EventHandler):
         self.event.a = self.event.b
         self.event.b = temp
 
-class RequestEvent(baseserver.event.ServerEvent):
-    def __init__(self, request_header, conn, remote, server):
-        baseserver.event.ServerEvent.__init__(self, server)
-        self.conn = conn
-        self.remote = remote
+class RequestEvent(baseserver.event.ConnectionEvent):
+    def __init__(self, request_header, *args, **kwargs):
+        baseserver.event.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request_header = request_header
 
 class Server(baseserver.server.BaseTCPServer):
@@ -260,6 +258,12 @@ class Server(baseserver.server.BaseTCPServer):
             conn_inactive = None, conn_sleep = 0.001, name = "SOCKS5",
             nthreads = -1, tcp_buflen = 65536, timeout = 0.001,
             udp_buflen = 512):
+        if not address: # use default host's port 1080
+            for addrinfo in socket.getaddrinfo(None, 0):
+                address = list(addrinfo[4])
+                address[1] = 1080
+                address = tuple(address)
+                break
         baseserver.server.BaseTCPServer.__init__(self,
             baseserver.event.ConnectionEvent, TCPConnectionHandler,
             address, backlog, buflen, conn_inactive, conn_sleep, name,
@@ -349,9 +353,8 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         fp = self.event.conn.makefile()
         request_header = protocol.header.TCPRequestHeader()
         
-        with self.event.server.print_lock:
-            print "Handling connection from", baseserver.straddress.straddress(
-                self.event.remote)
+        self.event.server.sprint("Handling connection with",
+            baseserver.straddress.straddress(self.event.remote))
         
         try:
             wrapped_conn = auth.Auth(self.event.conn)()
@@ -369,12 +372,12 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             except socket.error:
                 pass
         except Exception as e:
-            with self.event.server.print_lock:
-                print >> sys.stderr, traceback.format_exc()
+            self.event.server.sfprint(sys.stderr,
+                "ERROR while handling connection with %s:\n" % address_string,
+                traceback.format_exc())
         finally:
-            with self.event.server.print_lock:
-                print "Closing connection with", \
-                    baseserver.straddress.straddress(self.event.remote)
+            self.event.server.sprint("Closing connection with",
+                baseserver.straddress.straddress(self.event.remote))
             self.event.conn.close()
 
 class UDPDatagramHandler:

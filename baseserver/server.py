@@ -36,9 +36,9 @@ class BaseServer(socket.socket, threaded.Threaded):
             nthreads = -1, socket_event_function_name = None, timeout = 0.001,
             type = socket.SOCK_DGRAM):
         if not address: # determine the best default address
-            address = ("", 1080)
+            address = ("", 0)
 
-            for addrinfo in socket.getaddrinfo(None, 1080):
+            for addrinfo in socket.getaddrinfo(None, 0):
                 address = addrinfo[4]
                 break
         af = socket.AF_INET # determine the address family
@@ -49,7 +49,6 @@ class BaseServer(socket.socket, threaded.Threaded):
             raise ValueError("unknown address family")
         socket.socket.__init__(self, af, type)
         threaded.Threaded.__init__(self, nthreads)
-        self.address = address
         self.af = af
         self.alive = threaded.Synchronized(True)
         self.backlog = backlog
@@ -58,7 +57,8 @@ class BaseServer(socket.socket, threaded.Threaded):
         self.event_handler_class = event_handler_class
         self.name = name
         self.sleep = 1.0 / self.backlog # optimal value
-        self.bind(self.address)
+        self.bind(address)
+        self.address = self.getsockname() # by default, address is undefined
         self.print_lock = thread.allocate_lock()
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
@@ -67,8 +67,8 @@ class BaseServer(socket.socket, threaded.Threaded):
         self.timeout = timeout
 
     def __call__(self):
-        self.sprint("Started", self.name, "server on",
-            straddress.straddress(self.address))
+        address_string = straddress.straddress(self.address)
+        self.sprint("Started", self.name, "server on", address_string)
         
         try:
             for event in self:
@@ -76,8 +76,8 @@ class BaseServer(socket.socket, threaded.Threaded):
         except KeyboardInterrupt:
             self.alive.set(False)
         finally:
-            self.sprint("Closing", self.name, "server on %s..."
-                % straddress.straddress(self.address))
+            self.sprint("Closing", self.name,
+                "server on %s..." % address_string)
             self.shutdown(socket.SHUT_RDWR)
             self.close()
 
@@ -96,17 +96,17 @@ class BaseServer(socket.socket, threaded.Threaded):
             except socket.error:
                 pass
             time.sleep(self.sleep)
+    
+    def sprint(self, *args):
+        """synchronized print"""
+        self.sfprint(sys.stdout, *args)
 
-    def fsprint(self, fp, *args):
+    def sfprint(self, fp, *args):
         """synchronized print to file"""
         with self.print_lock:
             for e in args:
                 print >> fp, e,
             print >> fp
-    
-    def sprint(self, *args):
-        """synchronized print"""
-        self.fsprint(sys.stdout, *args)
 
 class BaseIterativeServer(BaseServer, threaded.Iterative):
     """
