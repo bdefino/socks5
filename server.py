@@ -22,19 +22,21 @@ import time
 import traceback
 
 import auth
+import baseserver
 import conf
 import errors
 import header
 import method
 import pack
-import threaded
 
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
 ######test everything
 #######play with sleep values
 ########integrate CLI
-#########restructure: migrate core functionality to a server framework
+#########integrate baseserver framework
+############integrate handler-created servers with baseserver
+##########finish UDPAssociateRequestHandler
 
 def open_config(path):
     """
@@ -100,61 +102,39 @@ def str_addr(addr, af = None):
         raise ValueError("invalid AF_INET6 address")
     raise ValueError("unknown address family")
 
-class BaseServerSpawnedEventHandler:
-    """
-    allows an event handler to access the server
-    that (in)directly spawned it
-    """
-    
-    def __init__(self, event, server):
-        self.event = event
-        self.server = server
-
-    def __call__(self):
-        raise NotImplementedError()
-
-class BaseRequestHandler(BaseServerSpawnedEventHandler):
-    def __init__(self, request_header, *args, **kwargs):
-        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
-        self.request_header = request_header
+class BaseRequestHandler(baseserver.eventhandler.EventHandler):
+    pass
 
 class BaseTCPRequestHandler(BaseRequestHandler):
-    def __init__(self, *args, **kwargs):
-        BaseRequestHandler.__init__(self, *args, **kwargs)
-        self.conn, self.remote = self.event
-
     def pipe_conn_with(self, other_conn):
-        """pipe the connection with another connection"""
+        """pipe the event's connection with another connection"""
         _continue = True
         last = time.time()
-
+        
         try:
-            other_conn.settimeout(self.server.timeout)
-            self.conn.settimeout(self.server.timeout)
+            other_conn.settimeout(self.event.server.timeout)
+            self.event.conn.settimeout(self.event.server.timeout)
         except socket.error:
             pass
         
-        while _continue:
-            with self.server._alive_lock:
-                if not self.server.alive:
-                    break
-            
-            for a, b in ((other_conn, self.conn), (self.conn, other_conn)):
+        while _continue and self.event.server.alive.get():
+            for a, b in ((other_conn, self.event.conn),
+                    (self.event.conn, other_conn)):
                 chunk = ""
                 time.sleep(self.server.conn_sleep)
                 
                 try:
-                    chunk = a.recv(self.server.tcp_buflen)
+                    chunk = a.recv(self.event.server.tcp_buflen)
                     last = time.time()
                 except socket.timeout:
-                    if time.time() - last >= self.server.conn_inactive:
+                    if time.time() - last >= self.event.server.conn_inactive:
                         _continue = False
                         break
                 except socket.error:
                     _continue = False
                     break
 
-                while 1: # TCP is lossless
+                while _continue and self.event.server.alive.get(): # lossless
                     try:
                         b.sendall(chunk)
                         break
@@ -162,76 +142,12 @@ class BaseTCPRequestHandler(BaseRequestHandler):
                         pass
                     except socket.error:
                         _continue = False
-                        break
 
-                if not _continue:
+                if not _continue or not self.event.server.alive.get():
                     break
 
-class BaseTCPServer(socket.socket, threaded.Threaded):
-    """base class for an interruptible TCP server socket"""
-    
-    def __init__(self, event_handler_class, address = None, backlog = 1000,
-            conn_inactive = 300, conn_sleep = 0.001, nthreads = -1,
-            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
-        if not address:
-            address = ("", 1080)
-
-            for addrinfo in socket.getaddrinfo(None, 1080):
-                address = addrinfo[4]
-                break
-        af = socket.AF_INET # determine the address family
-
-        if len(address) == 4:
-            af = socket.AF_INET6
-        elif not len(address) == 2:
-            raise ValueError("unknown address family")
-        socket.socket.__init__(self, af, socket.SOCK_STREAM)
-        threaded.Threaded.__init__(self, nthreads)
-        self.address = address
-        self.alive = True
-        self._alive_lock = thread.allocate_lock()
-        self.backlog = backlog
-        self.config = config
-        self.conn_inactive = conn_inactive
-        self.conn_sleep = conn_sleep
-        self.event_handler_class = event_handler_class
-        self.print_lock = thread.allocate_lock() # synchronize printing
-        self.sleep = 1.0 / self.backlog # optimal value
-        self.bind(self.address)
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self.settimeout(timeout)
-        self.tcp_buflen = tcp_buflen
-        self.timeout = timeout
-        self.udp_buflen = udp_buflen
-
-    def __call__(self):
-        self.listen(self.backlog)
-        
-        with self.print_lock:
-            print "Started server on", str_addr(self.address)
-        
-        try:
-            while 1:
-                try:
-                    self.execute(self.event_handler_class( self.accept(),
-                        self).__call__)
-                except socket.error:
-                    pass
-                time.sleep(self.sleep)
-        except KeyboardInterrupt:
-            with self._alive_lock:
-                self.alive = False
-        finally:
-            with self.print_lock:
-                print "Shutting down server..."
-            self.shutdown(socket.SHUT_RDWR)
-            self.close()
-
 class BaseUDPRequestHandler(BaseRequestHandler):
-    def __init__(self, *args, **kwargs):
-        BaseRequestHandler.__init__(self, *args, **kwargs)
-        self.datagram, self.remote = self.event
+    pass
 
 class BindRequestHandler(BaseTCPRequestHandler):
     """
@@ -261,9 +177,6 @@ class BindRequestHandler(BaseTCPRequestHandler):
     address and port number of the connecting host.
     """
     
-    def __init__(self, *args, **kwargs):
-        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
-
     def __call__(self):
         conn_reply = header.TCPReplyHeader()
         server_reply = header.TCPReplyHeader()
@@ -273,20 +186,21 @@ class BindRequestHandler(BaseTCPRequestHandler):
         target_remote = None
         
         try:
-            server_sock = socket.socket(self.server.af, socket.SOCK_STREAM)
-            server_sock.bind((self.request.unpack_addr(), 0))
+            server_sock = socket.socket(self.event.server.af,
+                socket.SOCK_STREAM)
+            server_sock.bind((self.event.request_header.unpack_addr(), 0))
             server_sock.listen(1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            server_sock.settimeout(self.server.conn_inactive)
+            server_sock.settimeout(self.event.server.conn_inactive)
             server_reply.bnd_addr, server_reply.bnd_port \
                 = server_sock.getsockname()
         except socket.error as e:
             server_reply.errno(e.args[0], bind = True)
         
         try:
-            self.conn.settimeout(self.server.timeout)
-            self.conn.sendall(str(server_reply))
+            self.event.conn.settimeout(self.event.server.timeout)
+            self.event.conn.sendall(str(server_reply))
             
             if server_reply.bnd_port: # accept the first connection
                 try:
@@ -298,7 +212,7 @@ class BindRequestHandler(BaseTCPRequestHandler):
 
             if server_sock: # close the server ASAP
                 server_sock.close()
-            self.conn.sendall(str(conn_reply))
+            self.event.conn.sendall(str(conn_reply))
             
             if target_conn:
                 self.pipe_conn_with(target_conn)
@@ -321,24 +235,22 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
     request.
     """
     
-    def __init__(self, *args, **kwargs):
-        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
-
     def __call__(self):
         reply = header.TCPReplyHeader()
         target_conn = None
 
         try:
             target_conn = socket.create_connection((
-                self.request_header.unpack_addr(),
-                self.request_header.dst_port), self.server.conn_inactive)
+                self.event.request_header.unpack_addr(),
+                self.event.request_header.dst_port),
+                self.event.server.conn_inactive)
             reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
         except socket.error as e:
             reply.errno(e.args[0], connect = True)
         
         try:
-            self.conn.settimeout(self.server.timeout)
-            self.conn.sendall(str(reply))
+            self.event.conn.settimeout(self.event.server.timeout)
+            self.event.conn.sendall(str(reply))
             
             if target_conn:
                 self.pipe_conn_with(target_conn)
@@ -346,9 +258,23 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             if target_conn:
                 target_conn.close()
 
-class Server(BaseTCPServer):
-    def __init__(self, **config):
-        BaseTCPServer.__init__(self, TCPConnectionHandler, **config)
+class RequestEvent(baseserver.events.ServerEvent):
+    def __init__(self, request_header, conn, remote, server):
+        baseserver.events.ServerEvent.__init__(self, server)
+        self.conn = conn
+        self.remote = remote
+        self.request_header = request_header
+
+class Server(baseserver.server.BaseTCPServer):
+    def __init__(self, event_class = baseserver.events.ConnectionEvent,
+            event_handler_class = baseserver.eventhandler.ConnectionHandler,
+            address = None, backlog = 100, buflen = 65536,
+            conn_inactive = None, conn_sleep = 0.001, name = "SOCKS5",
+            nthreads = -1, timeout = 0.001):
+        baseserver.server.BaseTCPServer.__init__(self,
+            baseserver.events.ConnectionEvent, TCPConnectionHandler,
+            address, backlog, buflen, conn_inactive, conn_sleep, name,
+            nthreads, timeout)
 
 class ServerError(errors.SOCKS5Error):
     pass
@@ -372,40 +298,40 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     UDP request messages to be relayed.
     """###############support fragmentation?
     
-    def __init__(self, *args, **kwargs):
-        BaseTCPRequestHandler.__init__(self, *args, **kwargs)
-
     def __call__(self):
         bound = False
         reply = header.TCPReplyHeader()
         server_sock = None
-        target_address = (request.unpack_addr(), request.dst_port)
+        target_address = (self.event.request_header.unpack_addr(),
+            self.event.request_header.dst_port)
         
         try:
-            server_sock = socket.socket(self.server.af, socket.SOCK_DGRAM)
-            server_sock.bind((self.request.unpack_addr(), 0))
+            server_sock = socket.socket(self.event.server.af,
+                socket.SOCK_DGRAM)
+            server_sock.bind((self.event.request_header.unpack_addr(), 0))
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            server_sock.settimeout(self.server.timeout)
+            server_sock.settimeout(self.event.server.conn_inactive)
             reply.bnd_addr, reply.bnd_port = server_sock.getpeername()
         except socket.error as e:
             reply.errno(e.args[0], bind = True)
         
         try:
-            self.conn.settimeout(self.server.timeout)
+            self.conn.settimeout(self.event.server.timeout)
             self.conn.sendall(str(reply))
-
+            
             if reply.bnd_port:
                 while 1:
                     try:
-                        self.conn.recv()
+                        self.conn.recv(0)
                     except socket.timeout:
                         pass
                     except socket.error:
                         break
                     
-                    try:
-                        datagram, remote = server_sock.recvfrom()
+                    try:###################needs to handle datagram requests
+                        datagram, remote = server_sock.recvfrom(
+                            self.event.server.udp_buflen)
                     except socket.error:
                         continue
                     
@@ -418,56 +344,48 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
             if server_sock:
                 server_sock.close()
 
-class TCPConnectionHandler(BaseServerSpawnedEventHandler):
+class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
     
-    def __init__(self, *args, **kwargs):
-        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
-        self.conn, self.remote = self.event
-
     def __call__(self):
-        fp = self.conn.makefile()
+        fp = self.event.conn.makefile()
         method_query = method.MethodQuery()
         request_header = header.TCPRequestHeader()
         
         with self.server.print_lock:
-            print "Handling connection from", str_addr(self.remote)
+            print "Handling connection from", baseserver.straddress.str_addr(
+                self.event.remote)
         
         try:
-            wrapped_conn = auth.Auth(self.conn)()
+            wrapped_conn = auth.Auth(self.event.conn)()
 
             if wrapped_conn: # authenticated/authorized
-                self.conn = wrapped_conn
-                request_header.fload(self.conn.makefile())
+                self.event.conn = wrapped_conn
+                request_header.fload(self.event.conn.makefile())
                 
                 TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
-                    request_header, self.event, self.server)()
+                    RequestEvent(request_header, self.event.conn,
+                        self.event.remote, self.event.server))()
         except KeyError: # command not supported
             try:
-                self.conn.sendall(str(header.ReplyHeader(rep = 7)))
+                self.event.conn.sendall(str(header.ReplyHeader(rep = 7)))
             except socket.error:
                 pass
         except Exception as e:
-            with self.server.print_lock:
+            with self.event.server.print_lock:
                 print >> sys.stderr, traceback.format_exc()
         finally:
-            with self.server.print_lock:
-                print "Closing connection with", str_addr(self.remote)
-            self.conn.close()
+            with self.event.server.print_lock:
+                print "Closing connection with", \
+                    baseserver.straddress.str_addr(self.event.remote)
+            self.event.conn.close()
 
 class UDPDatagramHandler:
-    def __init__(self, *args, **kwargs):
-        BaseServerSpawnedEventHandler.__init__(self, *args, **kwargs)
-        self.datagram, self.remote = self.event
-
     def __call__(self):######################
         pass
 
 class UDPRequestHandler(BaseUDPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        BaseUDPRequestHandler.__init__(self, *args, **kwargs)
-
     def __call__(self):###########################
         raise NotImplementedError()
 
