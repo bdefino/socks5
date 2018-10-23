@@ -18,7 +18,7 @@ __package__ = "protocol"
 import errno
 import socket
 
-import errors
+import error
 import pack
 
 __doc__ = "header formats"
@@ -160,7 +160,7 @@ class BaseUDPHeader(BaseHeader):
         header.append(pack.pack(self._port, 2))
         return "".join(header)
 
-class ResponseError(errors.ProtocolError):
+class ResponseError(error.ProtocolError):
     REP_TO_MSG = {1: "general SOCKS server failure",
         2: "connection not allowed by ruleset", 3: "Network unreachable",
         4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",

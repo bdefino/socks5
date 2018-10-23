@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "socks5"
 
-import errors
+import error
 import protocol
 
 __doc__ = "connection authenticator/authorization"
@@ -35,7 +35,7 @@ class Auth:
             return
         return self.conn
 
-class AuthError(errors.SOCKS5Error):
+class AuthError(error.SOCKS5Error):
     pass
 
 class Authenticator:

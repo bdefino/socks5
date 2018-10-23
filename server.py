@@ -24,7 +24,7 @@ import traceback
 import auth
 import baseserver
 import conf
-import errors
+import error
 import protocol
 
 __doc__ = """a simple SOCKS5 server framework"""
@@ -84,7 +84,6 @@ class BindRequestHandler(BaseRequestHandler):
         BaseRequestHandler.__init__(self, *args, **kwargs)
         self.conn_reply = protocol.header.TCPReplyHeader()
         self.event.conn.settimeout(self.event.server.timeout)
-        self.iteration = 0
         self.pipe_handler = None
         self.server_reply = protocol.header.TCPReplyHeader()
         self.server_sock = None
@@ -136,9 +135,7 @@ class BindRequestHandler(BaseRequestHandler):
                 raise StopIteration()
     
     def next(self):
-        self.iteration += 1
-
-        if self.iteration:
+        if target_conn:
             return self.pipe()
         return self.accept_first()
     
@@ -163,8 +160,8 @@ class ConnectRequestHandler(BaseRequestHandler):
     """
 
     def __init__(self, *args, **kwargs):
-        BaseRequestHandler.__init__(self, event)
-        self.iteration = 0
+        BaseRequestHandler.__init__(self, *args, **kwargs)
+        self.pipe_handler = None
         self.reply = protocol.header.TCPReplyHeader()
         self.target_conn = None
     
@@ -175,7 +172,7 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.event.request_header.dst_port),
                 self.event.server.conn_inactive)
             self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
-                target_conn, self.event.server))
+                self.target_conn, self.event.server))
             self.reply.bnd_addr, self.reply.bnd_port \
                 = self.target_conn.getsockname()
         except socket.error as e:
@@ -188,9 +185,7 @@ class ConnectRequestHandler(BaseRequestHandler):
             raise StopIteration()
 
     def next(self):
-        self.iteration += 1
-        
-        if self.iteration:
+        if self.target_conn:
             return self.pipe()
         return self.connect()
 
@@ -202,9 +197,9 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.target_conn.close()
             raise StopIteration()
 
-class PipeEvent(baseserver.events.ServerEvent):
+class PipeEvent(baseserver.event.ServerEvent):
     def __init__(self, a, b, server):
-        baseserver.events.ServerEvent.__init__(self, server)
+        baseserver.event.ServerEvent.__init__(self, server)
         self.a = a
         self.b = b
 
@@ -216,66 +211,68 @@ class PipeHandler(baseserver.eventhandler.EventHandler):
 
         for s in (self.event.a, self.event.b):
             s.settimeout(self.event.server.timeout)
-        self.last = None
+        self.last = time.time()
     
     def next(self):
-        if not self.last: # prep for inactivity timeout
-            self.last = time.time()
+        """pipe a chunk of data in one direction, then reverse the direction"""
+        chunk = ""
         
-        if self.event.server.alive.get():
-            for a, b in ((self.event.a, self.event.b),
-                    (self.event.b, self.event.a)):
-                chunk = ""
-                time.sleep(self.event.server.conn_sleep)
-                
-                try:
-                    chunk = a.recv(self.event.server.tcp_buflen)
-                    self.last = time.time()
-                except socket.timeout:
-                    if time.time() - self.last \
-                            >= self.event.server.conn_inactive:
-                        raise StopIteration()
-                except socket.error:
-                    raise StopIteration()
+        if not self.event.server.alive.get(): # check before
+            raise StopIteration()
+        
+        try:
+            chunk = self.event.a.recv(self.event.server.tcp_buflen)
+            self.last = time.time()
+        except socket.timeout:
+            if not self.event.server.conn_inactive == None \
+                    and time.time() - self.last \
+                        >= self.event.server.conn_inactive:
+                raise StopIteration()
+        except socket.error:
+            raise StopIteration()
+        
+        while self.event.server.alive.get(): # TCP is lossless
+            try:
+                self.event.b.sendall(chunk)
+                break
+            except socket.timeout:
+                pass
+            except socket.error:
+                raise StopIteration()
 
-                # TCP is lossless
-                
-                while self.event.server.alive.get():
-                    try:
-                        b.sendall(chunk)
-                        break
-                    except socket.timeout:
-                        pass
-                    except socket.error:
-                        raise StopIteration()
+        # change direction
+        
+        temp = self.event.a
+        self.event.a = self.event.b
+        self.event.b = temp
 
-                if self.event.server.alive.get():
-                    raise StopIteration()
-
-class RequestEvent(baseserver.events.ServerEvent):
+class RequestEvent(baseserver.event.ServerEvent):
     def __init__(self, request_header, conn, remote, server):
-        baseserver.events.ServerEvent.__init__(self, server)
+        baseserver.event.ServerEvent.__init__(self, server)
         self.conn = conn
         self.remote = remote
         self.request_header = request_header
 
 class Server(baseserver.server.BaseTCPServer):
-    def __init__(self, event_class = baseserver.events.ConnectionEvent,
+    def __init__(self, event_class = baseserver.event.ConnectionEvent,
             event_handler_class = baseserver.eventhandler.ConnectionHandler,
             address = None, backlog = 100, buflen = 65536,
             conn_inactive = None, conn_sleep = 0.001, name = "SOCKS5",
-            nthreads = -1, timeout = 0.001):
+            nthreads = -1, tcp_buflen = 65536, timeout = 0.001,
+            udp_buflen = 512):
         baseserver.server.BaseTCPServer.__init__(self,
-            baseserver.events.ConnectionEvent, TCPConnectionHandler,
+            baseserver.event.ConnectionEvent, TCPConnectionHandler,
             address, backlog, buflen, conn_inactive, conn_sleep, name,
             nthreads, timeout)
+        self.tcp_buflen = tcp_buflen
+        self.udp_buflen = udp_buflen
 
 class IterativeServer(Server, baseserver.server.threaded.Iterative):
     def __init__(self, *args, **kwargs):
         Server.__init__(self, *args, **kwargs)
         baseserver.server.threaded.__init__(self, self.nthreads)
 
-class ServerError(errors.SOCKS5Error):
+class ServerError(protocol.error.SOCKS5Error):
     pass
 
 class UDPAssociateRequestHandler(BaseRequestHandler):
@@ -352,13 +349,13 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         fp = self.event.conn.makefile()
         request_header = protocol.header.TCPRequestHeader()
         
-        with self.server.print_lock:
+        with self.event.server.print_lock:
             print "Handling connection from", baseserver.straddress.straddress(
                 self.event.remote)
         
         try:
             wrapped_conn = auth.Auth(self.event.conn)()
-
+            
             if wrapped_conn: # authenticated/authorized
                 self.event.conn = wrapped_conn
                 request_header.fload(self.event.conn.makefile())
@@ -393,8 +390,4 @@ if __name__ == "__main__":
     
     #mkconfig
     
-    if not set(config.keys()).issubset(set(("address", "backlog",
-            "conn_inactive", "conn_sleep", "nthreads", "tcp_buflen", "timeout",
-            "udp_buflen"))):##############gross
-        raise KeyError("detected invalid keys")
     Server(**config)()

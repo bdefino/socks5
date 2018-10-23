@@ -25,6 +25,9 @@ class Steppable:
         """execute all the steps"""
         for step in self:
             pass
+
+    def __iter__(self):
+        return self
     
     def next(self):
         raise StopIteration()

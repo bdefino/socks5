@@ -15,8 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "baseserver"
 
+import event
 import eventhandler
-import events
 import server
 import steppable
 import straddress

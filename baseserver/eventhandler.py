@@ -17,7 +17,6 @@ __package__ = "baseserver"
 
 import os
 
-import events
 import steppable
 
 __doc__ = "event handling framework"

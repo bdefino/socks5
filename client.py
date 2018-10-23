@@ -18,7 +18,6 @@ __package__ = "socks5"
 import socket
 
 import auth
-import errors
 import protocol
 
 __doc__ = "a simple SOCKS5 client"
@@ -58,7 +57,7 @@ class Client(socket.socket):
         
         try:
             response_header.fload(self)
-        except (errors.ProtocolError, socket.error) as e:
+        except (protocol.error.ProtocolError, socket.error) as e:
             self.close()
 
             if complain:
@@ -68,5 +67,5 @@ class Client(socket.socket):
                 response_header = None
         return response_header
 
-class ClientError(errors.SOCKS5Error):
+class ClientError(protocol.error.SOCKS5Error):
     pass

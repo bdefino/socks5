@@ -20,8 +20,8 @@ import sys
 import thread
 import time
 
+import event
 import eventhandler
-import events
 import straddress
 import threaded
 
@@ -30,7 +30,7 @@ __doc__ = "server core implementation"
 class BaseServer(socket.socket, threaded.Threaded):
     """base class for an interruptible server socket"""
     
-    def __init__(self, event_class = events.DummyEvent,
+    def __init__(self, event_class = event.DummyEvent,
             event_handler_class = eventhandler.DummyHandler,
             address = None, backlog = 100, buflen = 512, name = "base",
             nthreads = -1, socket_event_function_name = None, timeout = 0.001,
@@ -92,7 +92,7 @@ class BaseServer(socket.socket, threaded.Threaded):
             
             try:
                 return self.event_class(*getattr(self,
-                    self.socket_event_function_name)())
+                    self.socket_event_function_name)(), server = self)
             except socket.error:
                 pass
             time.sleep(self.sleep)
@@ -120,7 +120,7 @@ class BaseIterativeServer(BaseServer, threaded.Iterative):
         threaded.Iterative.__init__(self, self.nthreads)
 
 class BaseTCPServer(BaseServer):
-    def __init__(self, event_class = events.ConnectionEvent,
+    def __init__(self, event_class = event.ConnectionEvent,
             event_handler_class = eventhandler.ConnectionHandler,
             address = None, backlog = 100, buflen = 65536,
             conn_inactive = None, conn_sleep = 0.001, name = "base TCP",
@@ -141,7 +141,7 @@ class BaseIterativeTCPServer(BaseTCPServer, threaded.Iterative):
         threaded.Iterative.__init__(self, self.nthreads)
 
 class BaseUDPServer(BaseServer):
-    def __init__(self, event_class = events.DatagramEvent,
+    def __init__(self, event_class = event.DatagramEvent,
             event_handler_class = eventhandler.DatagramHandler, address = None,
             backlog = 100, buflen = 512, name = "base UDP", nthreads = -1,
             timeout = 0.001):

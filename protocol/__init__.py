@@ -15,7 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = "protocol"
 
-import errors
+import error
 import header
 import method
 

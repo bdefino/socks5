@@ -17,8 +17,7 @@ __package__ = "socks5"
 
 import auth
 import client
-import header
-import method
+import protocol
 import server
 
 __doc__ = "a simple RFC 1928-compliant SOCKS5 library"
