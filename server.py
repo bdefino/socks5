@@ -34,6 +34,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ########integrate CLI
 ############integrate handler-created servers with baseserver
 ##########finish UDPAssociateRequestHandler
+###########improve security
 
 def open_config(path):
     """
@@ -88,12 +89,10 @@ class BindRequestHandler(BaseRequestHandler):
         self.server_reply = protocol.header.TCPReplyHeader()
         self.server_sock = None
         self.start = time.time()
-        self.steps = ["accept_first", "pipe"]
         self.target_conn = None
         self.target_remote = None
     
     def accept_first(self):
-        """accept the first connection"""
         try:
             self.server_sock = socket.socket(self.event.server.af,
                 socket.SOCK_STREAM)
@@ -119,11 +118,17 @@ class BindRequestHandler(BaseRequestHandler):
                     = self.server_sock.accept()
                 self.conn_reply.bnd_addr, self.conn_reply.bnd_port \
                     = self.target_remote
+                self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
+                    self.target_conn, self.event.server))
             except socket.error as e:
                 self.conn_reply.errno(e.args[0], accept = True)
-            self.event.conn.sendall(str(self.conn_reply))
-            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
-                self.target_conn, self.event.server))
+
+            try:
+                self.event.conn.sendall(str(self.conn_reply))
+            except socket.error:
+                if self.target_conn:
+                    target_conn.close()
+                raise StopIteration()
         finally:
             self.server_sock.close()
             
@@ -132,15 +137,17 @@ class BindRequestHandler(BaseRequestHandler):
     
     def next(self):
         self.iteration += 1
-        return getattr(self, self.steps[min(self.iteration - 1,
-            len(self.steps - 1))])()
+
+        if self.iteration:
+            return self.pipe()
+        return self.accept_first()
     
     def pipe(self):
-        """pipe the connection with the target connection"""
         try:
             self.pipe_handler.next()
         except StopIteration:
-            self.target_conn.close()
+            if self.target_conn:
+                self.target_conn.close()
             raise StopIteration()
 
 class ConnectRequestHandler(BaseRequestHandler):
@@ -154,29 +161,46 @@ class ConnectRequestHandler(BaseRequestHandler):
     client-side source address and port in evaluating the CONNECT
     request.
     """
+
+    def __init__(self, *args, **kwargs):
+        BaseRequestHandler.__init__(self, event)
+        self.iteration = 0
+        self.reply = protocol.header.TCPReplyHeader()
+        self.target_conn = None
     
-    def __call__(self):
-        reply = protocol.header.TCPReplyHeader()
-        target_conn = None
-        
+    def connect(self):
         try:
-            target_conn = socket.create_connection((
+            self.target_conn = socket.create_connection((
                 self.event.request_header.unpack_addr(),
                 self.event.request_header.dst_port),
                 self.event.server.conn_inactive)
-            reply.bnd_addr, reply.bnd_port = target_conn.getsockname()
+            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
+                target_conn, self.event.server))
+            self.reply.bnd_addr, self.reply.bnd_port \
+                = self.target_conn.getsockname()
         except socket.error as e:
             reply.errno(e.args[0], connect = True)
         
         try:
             self.event.conn.settimeout(self.event.server.timeout)
-            self.event.conn.sendall(str(reply))
-            
-            if target_conn:
-                self.pipe_conn_with(target_conn)
-        finally:
-            if target_conn:
-                target_conn.close()
+            self.event.conn.sendall(str(self.reply))
+        except socket.error:
+            raise StopIteration()
+
+    def next(self):
+        self.iteration += 1
+        
+        if self.iteration:
+            return self.pipe()
+        return self.connect()
+
+    def pipe(self):
+        try:
+            self.pipe_handler.next()
+        except StopIteration:
+            if self.target_conn:
+                self.target_conn.close()
+            raise StopIteration()
 
 class PipeEvent(baseserver.events.ServerEvent):
     def __init__(self, a, b, server):
@@ -185,7 +209,7 @@ class PipeEvent(baseserver.events.ServerEvent):
         self.b = b
 
 class PipeHandler(baseserver.eventhandler.EventHandler):
-    """pipe two sockets together"""
+    """bidirectional socket relay"""
     
     def __init__(self, event):
         baseserver.eventhandler.EventHandler.__init__(self, event)
@@ -272,6 +296,7 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
     fields indicate the port number/address where the client MUST send
     UDP request messages to be relayed.
     """###############support fragmentation?
+    ###################integrate steppability
     
     def __call__(self):
         bound = False
