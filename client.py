@@ -19,7 +19,7 @@ import socket
 
 import auth
 import errors
-import header
+import protocol
 
 __doc__ = "a simple SOCKS5 client"
 
@@ -49,11 +49,11 @@ class Client(socket.socket):
         establish a SOCKS5 control connection,
         and return the ResponseHeader or optionally complain
         """
-        response_header = header.TCPResponseHeader()
+        response_header = protocol.header.TCPResponseHeader()
         socket.socket.connect(self, address)
 
         if not request_header:
-            request_header = header.TCPRequestHeader()
+            request_header = protocol.header.TCPRequestHeader()
         self.sendall(str(request_header))
         
         try:

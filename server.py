@@ -25,16 +25,13 @@ import auth
 import baseserver
 import conf
 import errors
-import header
-import method
-import pack
+import protocol
 
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
 ######test everything
 #######play with sleep values
 ########integrate CLI
-#########integrate baseserver framework
 ############integrate handler-created servers with baseserver
 ##########finish UDPAssociateRequestHandler
 
@@ -51,105 +48,10 @@ def open_config(path):
             config[k] = v
     return config
 
-def parse_sockaddr(sockaddr, af = None):
-    """
-    parse a socket address string
-
-    for AF_INET, this is: DOMAIN:PORT
-
-    for AF_INET6, this is: DOMAIN,PORT,FLOW INFO,SCOPE ID
-    """
-    if af == None:
-        af = socket.AF_INET
-        
-        if ',' in sockaddr:
-            af = socket.AF_INET6
-    parsed = ()
-    
-    if af == socket.AF_INET:
-        parsed = sockaddr.split(':', 1)
-    elif af == socket.AF_INET6:
-        parsed = sockaddr.split(',', 3)
-    else:
-        raise ValueError("unknown address family")
-    
-    try:
-        for i in range(1, len(parsed)):
-            parsed[i] = int(parsed[i])
-    except (IndexError, ValueError):
-        raise ValueError("invalid socket address string")
-    return tuple(parsed)
-
-def str_addr(addr, af = None):
-    """
-    convert an address to  string
-
-    see parse_sockaddr for the formats
-    """
-    if af == None:
-        if len(addr) == 2:
-            af = socket.AF_INET
-        elif len(addr) == 4:
-            af = socket.AF_INET6
-    
-    if af == socket.AF_INET:
-        if len(addr) == 2:
-            return ':'.join((str(e) for e in addr[:2]))
-        raise ValueError("invalid AF_INET address")
-    elif af == socket.AF_INET6:
-        if len(addr) == 4:
-            return ','.join((str(e) for e in addr[:4]))
-        raise ValueError("invalid AF_INET6 address")
-    raise ValueError("unknown address family")
-
 class BaseRequestHandler(baseserver.eventhandler.EventHandler):
     pass
 
-class BaseTCPRequestHandler(BaseRequestHandler):
-    def pipe_conn_with(self, other_conn):
-        """pipe the event's connection with another connection"""
-        _continue = True
-        last = time.time()
-        
-        try:
-            other_conn.settimeout(self.event.server.timeout)
-            self.event.conn.settimeout(self.event.server.timeout)
-        except socket.error:
-            pass
-        
-        while _continue and self.event.server.alive.get():
-            for a, b in ((other_conn, self.event.conn),
-                    (self.event.conn, other_conn)):
-                chunk = ""
-                time.sleep(self.server.conn_sleep)
-                
-                try:
-                    chunk = a.recv(self.event.server.tcp_buflen)
-                    last = time.time()
-                except socket.timeout:
-                    if time.time() - last >= self.event.server.conn_inactive:
-                        _continue = False
-                        break
-                except socket.error:
-                    _continue = False
-                    break
-
-                while _continue and self.event.server.alive.get(): # lossless
-                    try:
-                        b.sendall(chunk)
-                        break
-                    except socket.timeout:
-                        pass
-                    except socket.error:
-                        _continue = False
-
-                if not _continue or not self.event.server.alive.get():
-                    break
-
-class BaseUDPRequestHandler(BaseRequestHandler):
-    pass
-
-class BindRequestHandler(BaseTCPRequestHandler):
+class BindRequestHandler(BaseRequestHandler):
     """
     The BIND request is used in protocols which require the client to
     accept connections from the server.  FTP is a well-known example,
@@ -177,53 +79,71 @@ class BindRequestHandler(BaseTCPRequestHandler):
     address and port number of the connecting host.
     """
     
-    def __call__(self):
-        conn_reply = header.TCPReplyHeader()
-        server_reply = header.TCPReplyHeader()
-        server_sock = None
-        start = time.time()
-        target_conn = None
-        target_remote = None
-        
+    def __init__(self, *args, **kwargs):
+        BaseRequestHandler.__init__(self, *args, **kwargs)
+        self.conn_reply = protocol.header.TCPReplyHeader()
+        self.event.conn.settimeout(self.event.server.timeout)
+        self.iteration = 0
+        self.pipe_handler = None
+        self.server_reply = protocol.header.TCPReplyHeader()
+        self.server_sock = None
+        self.start = time.time()
+        self.steps = ["accept_first", "pipe"]
+        self.target_conn = None
+        self.target_remote = None
+    
+    def accept_first(self):
+        """accept the first connection"""
         try:
-            server_sock = socket.socket(self.event.server.af,
+            self.server_sock = socket.socket(self.event.server.af,
                 socket.SOCK_STREAM)
-            server_sock.bind((self.event.request_header.unpack_addr(), 0))
-            server_sock.listen(1)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            server_sock.settimeout(self.event.server.conn_inactive)
-            server_reply.bnd_addr, server_reply.bnd_port \
-                = server_sock.getsockname()
-        except socket.error as e:
-            server_reply.errno(e.args[0], bind = True)
-        
-        try:
+            self.server_sock.bind((self.event.request_header.unpack_addr(), 0))
+            self.server_sock.listen(1)
+            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
+                1)
+            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT,
+                1)
+            self.server_sock.settimeout(self.event.server.conn_inactive)
+            self.server_reply.bnd_addr, self.server_reply.bnd_port \
+                = self.server_sock.getsockname()
+            
             self.event.conn.settimeout(self.event.server.timeout)
-            self.event.conn.sendall(str(server_reply))
-            
-            if server_reply.bnd_port: # accept the first connection
-                try:
-                    target_conn, target_remote = server_sock.accept()
-                    conn_reply.bnd_addr, conn_reply.bnd_port \
-                        = target_remote
-                except socket.error as e:
-                    conn_reply.errno(e.args[0], accept = True)
+            self.event.conn.sendall(str(self.server_reply))
+        except socket.error as e:
+            self.server_reply.errno(e.args[0], bind = True)
+            raise StopIteration()
 
-            if server_sock: # close the server ASAP
-                server_sock.close()
-            self.event.conn.sendall(str(conn_reply))
-            
-            if target_conn:
-                self.pipe_conn_with(target_conn)
+        try:
+            try:
+                self.target_conn, self.target_remote \
+                    = self.server_sock.accept()
+                self.conn_reply.bnd_addr, self.conn_reply.bnd_port \
+                    = self.target_remote
+            except socket.error as e:
+                self.conn_reply.errno(e.args[0], accept = True)
+            self.event.conn.sendall(str(self.conn_reply))
+            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
+                self.target_conn, self.event.server))
         finally:
-            if server_sock:
-                server_sock.close()
+            self.server_sock.close()
             
-            if target_conn:
-                target_conn.close()
+            if not self.target_conn:
+                raise StopIteration()
+    
+    def next(self):
+        self.iteration += 1
+        return getattr(self, self.steps[min(self.iteration - 1,
+            len(self.steps - 1))])()
+    
+    def pipe(self):
+        """pipe the connection with the target connection"""
+        try:
+            self.pipe_handler.next()
+        except StopIteration:
+            self.target_conn.close()
+            raise StopIteration()
 
-class ConnectRequestHandler(BaseTCPRequestHandler):
+class ConnectRequestHandler(BaseRequestHandler):
     """
     In the reply to a CONNECT, BND.PORT contains the port number that the
     server assigned to connect to the target host, while BND.ADDR
@@ -236,9 +156,9 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
     """
     
     def __call__(self):
-        reply = header.TCPReplyHeader()
+        reply = protocol.header.TCPReplyHeader()
         target_conn = None
-
+        
         try:
             target_conn = socket.create_connection((
                 self.event.request_header.unpack_addr(),
@@ -258,6 +178,56 @@ class ConnectRequestHandler(BaseTCPRequestHandler):
             if target_conn:
                 target_conn.close()
 
+class PipeEvent(baseserver.events.ServerEvent):
+    def __init__(self, a, b, server):
+        baseserver.events.ServerEvent.__init__(self, server)
+        self.a = a
+        self.b = b
+
+class PipeHandler(baseserver.eventhandler.EventHandler):
+    """pipe two sockets together"""
+    
+    def __init__(self, event):
+        baseserver.eventhandler.EventHandler.__init__(self, event)
+
+        for s in (self.event.a, self.event.b):
+            s.settimeout(self.event.server.timeout)
+        self.last = None
+    
+    def next(self):
+        if not self.last: # prep for inactivity timeout
+            self.last = time.time()
+        
+        if self.event.server.alive.get():
+            for a, b in ((self.event.a, self.event.b),
+                    (self.event.b, self.event.a)):
+                chunk = ""
+                time.sleep(self.event.server.conn_sleep)
+                
+                try:
+                    chunk = a.recv(self.event.server.tcp_buflen)
+                    self.last = time.time()
+                except socket.timeout:
+                    if time.time() - self.last \
+                            >= self.event.server.conn_inactive:
+                        raise StopIteration()
+                except socket.error:
+                    raise StopIteration()
+
+                # TCP is lossless
+                
+                while self.event.server.alive.get():
+                    try:
+                        b.sendall(chunk)
+                        break
+                    except socket.timeout:
+                        pass
+                    except socket.error:
+                        raise StopIteration()
+
+                if self.event.server.alive.get():
+                    raise StopIteration()
+
 class RequestEvent(baseserver.events.ServerEvent):
     def __init__(self, request_header, conn, remote, server):
         baseserver.events.ServerEvent.__init__(self, server)
@@ -276,10 +246,15 @@ class Server(baseserver.server.BaseTCPServer):
             address, backlog, buflen, conn_inactive, conn_sleep, name,
             nthreads, timeout)
 
+class IterativeServer(Server, baseserver.server.threaded.Iterative):
+    def __init__(self, *args, **kwargs):
+        Server.__init__(self, *args, **kwargs)
+        baseserver.server.threaded.__init__(self, self.nthreads)
+
 class ServerError(errors.SOCKS5Error):
     pass
 
-class UDPAssociateRequestHandler(BaseTCPRequestHandler):
+class UDPAssociateRequestHandler(BaseRequestHandler):
     """
     The UDP ASSOCIATE request is used to establish an association within
     the UDP relay process to handle UDP datagrams.  The DST.ADDR and
@@ -300,7 +275,7 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     
     def __call__(self):
         bound = False
-        reply = header.TCPReplyHeader()
+        reply = protocol.header.TCPReplyHeader()
         server_sock = None
         target_address = (self.event.request_header.unpack_addr(),
             self.event.request_header.dst_port)
@@ -350,11 +325,10 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     
     def __call__(self):
         fp = self.event.conn.makefile()
-        method_query = method.MethodQuery()
-        request_header = header.TCPRequestHeader()
+        request_header = protocol.header.TCPRequestHeader()
         
         with self.server.print_lock:
-            print "Handling connection from", baseserver.straddress.str_addr(
+            print "Handling connection from", baseserver.straddress.straddress(
                 self.event.remote)
         
         try:
@@ -378,14 +352,14 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         finally:
             with self.event.server.print_lock:
                 print "Closing connection with", \
-                    baseserver.straddress.str_addr(self.event.remote)
+                    baseserver.straddress.straddress(self.event.remote)
             self.event.conn.close()
 
 class UDPDatagramHandler:
     def __call__(self):######################
         pass
 
-class UDPRequestHandler(BaseUDPRequestHandler):
+class UDPRequestHandler(BaseRequestHandler):
     def __call__(self):###########################
         raise NotImplementedError()
 
