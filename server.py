@@ -34,6 +34,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ######test everything
 #######play with sleep values
 ########integrate CLI
+#########restructure: migrate core functionality to a server framework
 
 def open_config(path):
     """
@@ -76,11 +77,6 @@ def parse_sockaddr(sockaddr, af = None):
     except (IndexError, ValueError):
         raise ValueError("invalid socket address string")
     return tuple(parsed)
-
-def server_factory(proto_name, *args, **kwargs):
-    """factory function for a protocol-specific SOCKS5 server"""
-    return {"tcp": TCPServer, "udp": UDPServer}[protocol.strip().lower()](
-        *args, **kwargs)
 
 def str_addr(addr, af = None):
     """
@@ -374,7 +370,7 @@ class UDPAssociateRequestHandler(BaseTCPRequestHandler):
     In the reply to a UDP ASSOCIATE request, the BND.PORT and BND.ADDR
     fields indicate the port number/address where the client MUST send
     UDP request messages to be relayed.
-    """
+    """###############support fragmentation?
     
     def __init__(self, *args, **kwargs):
         BaseTCPRequestHandler.__init__(self, *args, **kwargs)

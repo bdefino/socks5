@@ -30,6 +30,24 @@ class FuncInfo:
         self.kwargs = kwargs
         self.output = output
 
+class Synchronized:
+    def __init__(self, value = None):
+        self._lock = thread.allocate_lock()
+        self.value = value
+
+    def get(self):
+        with self._lock:
+            return self.value
+
+    def modify(self, func = lambda v: v):
+        """modify the value via a function"""
+        with self._lock:
+            self.value = func(self.value)
+
+    def set(self, value = None):
+        with self._lock:
+            self.value = value
+
 class Threaded(Queue.Queue):
     """
     allocates up to N additional threads for function calls (w/ blocking)
@@ -44,18 +62,7 @@ class Threaded(Queue.Queue):
 
     def __init__(self, nthreads = -1, queue_output = False):
         self._allocation_lock = thread.allocate_lock()
-        self.nactive_threads = 0
-        self._nactive_threads_lock = thread.allocate_lock()
-        self.nthreads = nthreads
-        self.output_queue = None
-
-        if queue_output:
-            self.output_queue = Queue.Queue()
-
-    def __init__(self, nthreads = 1, queue_output = False):
-        self._allocation_lock = thread.allocate_lock()
-        self.nactive_threads = 0
-        self._nactive_threads_lock = thread.allocate_lock()
+        self.nactive_threads = Synchronized(0)
         self.nthreads = nthreads
         self.output_queue = None
 
@@ -68,17 +75,16 @@ class Threaded(Queue.Queue):
             if self.nthreads > 0:
                 with self._allocation_lock: # block
                     while 1:
-                        with self._nactive_threads_lock:
-                            if self.nactive_threads < self.nthreads:
-                                self.nactive_threads += 1
+                        with self.nactive_threads._lock:
+                            if self.nactive_threads.value < self.nthreads:
+                                self.nactive_threads.value += 1
                                 break
             # otherwise, self.nthreads < 0, so we don't block
             thread.start_new_thread(self._handle_thread,
                 tuple([func] + list(args)), kwargs)
         else:
             with self._allocation_lock: # block
-                with self._nactive_threads_lock:
-                    self.nactive_threads += 1
+                self.nactive_threads.modify(lambda v: v + 1)
                 self._handle_thread(func, *args, **kwargs)
     
     def _handle_thread(self, func, *args, **kwargs):
@@ -92,8 +98,7 @@ class Threaded(Queue.Queue):
             self.output_queue.put(FuncInfo(func, output, *args, **kwargs))
 
         if self.nthreads:
-            with self._nactive_threads_lock:
-                self.nactive_threads -= 1
+            self.nactive_threads.modify(lambda v: v - 1)
 
 class Iterative(Threaded):
     """
@@ -112,6 +117,7 @@ class Iterative(Threaded):
         if self.nthreads > 0:
             for n in range(self.nthreads):
                 thread.start_new_thread(self._slave, ())
+                self.nactive_threads.modify(lambda v: v + 1)
 
     def execute(self, func, *args, **kwargs):
         """add the task to the queue"""
