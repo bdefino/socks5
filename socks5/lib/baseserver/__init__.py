@@ -13,21 +13,12 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "baseserver"
+__package__ = __name__
 
-__doc__ = "steppable execution via generators"
+import event
+import eventhandler
+import server
+import straddress
+from lib import threaded
 
-class Steppable:
-    def __init__(self):
-        pass
-
-    def __call__(self):
-        """execute all the steps"""
-        for step in self:
-            pass
-
-    def __iter__(self):
-        return self
-    
-    def next(self):
-        raise StopIteration()
+__doc__ = "a simple server framework"

@@ -13,10 +13,11 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "protocol"
+__package__ = __name__
 
-class SOCKS5Error(RuntimeError):
-    pass
+import auth
+import client
+import protocol
+import server
 
-class ProtocolError(SOCKS5Error):
-    pass
+__doc__ = "a simple RFC 1928-compliant SOCKS5 library"

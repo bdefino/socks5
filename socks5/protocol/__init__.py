@@ -1,4 +1,4 @@
-# Copyright 2018 Bailey Defino
+# Copyright (C) 2018 Bailey Defino
 # <https://bdefino.github.io>
 
 # This program is free software: you can redistribute it and/or modify
@@ -13,12 +13,10 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "baseserver"
+__package__ = __name__
 
-import event
-import eventhandler
-import server
-import steppable
-import straddress
+import error
+import header
+import method
 
-__doc__ = "a simple server framework"
+__doc__ = "a simple RFC 1928-compliant SOCKS5 library"

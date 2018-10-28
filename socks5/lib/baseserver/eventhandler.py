@@ -13,25 +13,25 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "baseserver"
-
 import os
+import sys
 
-import steppable
+from lib import threaded
 
 __doc__ = "event handling framework"
 
-class EventHandler(steppable.Steppable):
+class EventHandler(threaded.IterableTask):
     """
     the base class for an event handler
 
-    this SHOULD be steppable, though overriding __call__ is acceptable
+    this SHOULD be iterable, though overriding __call__ is acceptable
     when stepping isn't necessary
     """
     
-    def __init__(self, event):
-        steppable.Steppable.__init__(self)
+    def __init__(self, event, parent = None):
+        threaded.IterableTask.__init__(self)
         self.event = event
+        self.parent = parent
 
 class ConnectionHandler(EventHandler):
     pass
@@ -45,14 +45,14 @@ class DummyHandler(EventHandler):
 class ForkingEventHandler(EventHandler):
     """
     forks when executing __call__,
-    but also allows steppability in the current process
+    but also preserves steppability within the resulting process
     """
     
-    def __init__(self, event):
-        EventHandler.__init__(self, event)
+    def __init__(self, *args, **kwargs):
+        EventHandler.__init__(self, *args, **kwargs)
         self.pid = None
 
-    def __call__(self):
+    def __call__(self, kill_parent = False):
         """fork before execution"""
         if self.pid == None:
             self.pid = os.fork()
@@ -60,5 +60,7 @@ class ForkingEventHandler(EventHandler):
             if self.pid < 0:
                 raise OSError("unable to fork")
             elif self.pid > 0:
+                if kill_parent:
+                    sys.exit(0)
                 return
-        steppable.Steppable.__call__(self)
+        threaded.IterableTask.__call__(self)

@@ -13,8 +13,6 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "socks5"
-
 import socket
 import sys
 import thread
@@ -22,9 +20,8 @@ import time
 import traceback
 
 import auth
-import baseserver
-import conf
-import error
+from lib import baseserver
+from lib import conf
 import protocol
 
 __doc__ = """a simple SOCKS5 server framework"""
@@ -161,22 +158,30 @@ class ConnectRequestHandler(BaseRequestHandler):
 
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
-        self.pipe_handler = None
+        self.pipe_sockets_handler = None
         self.reply = protocol.header.TCPReplyHeader()
         self.target_conn = None
+
+    def __call__(self):###################debugging
+        try:
+            baseserver.threaded.IterableTask.__call__(self)
+        except Exception as e:
+            self.event.server.sfprint(sys.stderr, traceback.format_exc())
     
     def connect(self):
         try:
-            self.target_conn = socket.create_connection((
-                self.event.request_header.unpack_addr(),
-                self.event.request_header.dst_port),
-                self.event.server.conn_inactive)
-            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
-                self.target_conn, self.event.server))
+            self.target_conn = socket.socket(self.event.request_header.determine_af(),
+                socket.SOCK_STREAM)
+            self.target_conn.settimeout(self.event.server.conn_inactive)
+            self.target_conn.connect(self.event.request_header.address_tuple())
+            self.pipe_sockets_handler = PipeSocketsHandler(PipeSocketsEvent(
+                self.event.conn, self.target_conn, self.event.server))
             self.reply.bnd_addr, self.reply.bnd_port \
                 = self.target_conn.getsockname()
         except socket.error as e:
-            reply.errno(e.args[0], connect = True)
+            self.reply.errno(e.args[0], connect = True)
+            self.target_conn.close()
+            self.target_conn = None
         
         try:
             self.event.conn.settimeout(self.event.server.timeout)
@@ -186,24 +191,24 @@ class ConnectRequestHandler(BaseRequestHandler):
 
     def next(self):
         if self.target_conn:
-            return self.pipe()
+            return self.pipe_sockets()
         return self.connect()
 
-    def pipe(self):
+    def pipe_sockets(self):
         try:
-            self.pipe_handler.next()
+            self.pipe_sockets_handler.next()
         except StopIteration:
             if self.target_conn:
                 self.target_conn.close()
             raise StopIteration()
 
-class PipeEvent(baseserver.event.ServerEvent):
+class PipeSocketsEvent(baseserver.event.ServerEvent):
     def __init__(self, a, b, server):
         baseserver.event.ServerEvent.__init__(self, server)
         self.a = a
         self.b = b
 
-class PipeHandler(baseserver.eventhandler.EventHandler):
+class PipeSocketsHandler(baseserver.eventhandler.EventHandler):
     """bidirectional socket relay"""
     
     def __init__(self, event):
@@ -250,31 +255,6 @@ class RequestEvent(baseserver.event.ConnectionEvent):
     def __init__(self, request_header, *args, **kwargs):
         baseserver.event.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request_header = request_header
-
-class Server(baseserver.server.BaseTCPServer):
-    def __init__(self, event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = baseserver.eventhandler.ConnectionHandler,
-            address = None, backlog = 100, buflen = 65536,
-            conn_inactive = None, conn_sleep = 0.001, name = "SOCKS5",
-            nthreads = -1, tcp_buflen = 65536, timeout = 0.001,
-            udp_buflen = 512):
-        if not address: # use default host's port 1080
-            for addrinfo in socket.getaddrinfo(None, 0):
-                address = list(addrinfo[4])
-                address[1] = 1080
-                address = tuple(address)
-                break
-        baseserver.server.BaseTCPServer.__init__(self,
-            baseserver.event.ConnectionEvent, TCPConnectionHandler,
-            address, backlog, buflen, conn_inactive, conn_sleep, name,
-            nthreads, timeout)
-        self.tcp_buflen = tcp_buflen
-        self.udp_buflen = udp_buflen
-
-class IterativeServer(Server, baseserver.server.threaded.Iterative):
-    def __init__(self, *args, **kwargs):
-        Server.__init__(self, *args, **kwargs)
-        baseserver.server.threaded.__init__(self, self.nthreads)
 
 class ServerError(protocol.error.SOCKS5Error):
     pass
@@ -349,7 +329,7 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
     
-    def __call__(self):
+    def next(self):
         fp = self.event.conn.makefile()
         request_header = protocol.header.TCPRequestHeader()
         
@@ -379,6 +359,34 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             self.event.server.sprint("Closing connection with",
                 baseserver.straddress.straddress(self.event.remote))
             self.event.conn.close()
+        raise StopIteration()
+
+class Server(baseserver.server.BaseTCPServer):
+    def __init__(self, address = baseserver.server.best_address(1080),
+            backlog = 100, buflen = 65536, conn_inactive = None,
+            conn_sleep = 0.001, event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = TCPConnectionHandler, name = "SOCKS5",
+            nthreads = -1, tcp_buflen = 65536,
+            threaded_class = baseserver.threaded.Threaded, timeout = 0.001,
+            udp_buflen = 512):
+        baseserver.server.BaseTCPServer.__init__(self, address, backlog,
+            buflen, conn_inactive, conn_sleep, event_class,
+            event_handler_class, name, nthreads, threaded_class, timeout)
+        self.tcp_buflen = tcp_buflen
+        self.udp_buflen = udp_buflen
+
+class IterativeServer(baseserver.server.BaseIterativeTCPServer):
+    def __init__(self, event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = baseserver.eventhandler.ConnectionHandler,
+            address = baseserver.server.best_address(1080), backlog = 100,
+            buflen = 65536, conn_inactive = None, conn_sleep = 0.001,
+            name = "iterative SOCKS5", nthreads = -1, tcp_buflen = 65536,
+            timeout = 0.001, udp_buflen = 512):
+        Server.__init__(self, address, backlog, buflen, conn_inactive,
+            conn_sleep, event_class, event_handler_class, name, nthreads,
+            baseserver.threaded.Iterative, timeout)
+        self.tcp_buflen = tcp_buflen
+        self.udp_buflen = udp_buflen
 
 class UDPDatagramHandler:
     def __call__(self):######################

@@ -13,8 +13,6 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "protocol"
-
 import errno
 import socket
 
@@ -40,15 +38,30 @@ class BaseHeader:
         self._addr = addr
         self.atyp = atyp
 
-    def unpack_addr(self):
-        """return the IP address or domain name in *.ADDR"""
-        if not self.atyp == 3: # create a usable address
-            af = socket.AF_INET
+    def address_tuple(self):
+        """return a usable address tuple"""
+        af = self.determine_af()
+        host = self.unpack_addr()
 
-            if self.atyp == 4:
-                af = socket.AF_INET6
-            return socket.inet_ntop(af, self._addr)
-        return self._addr
+        if af == socket.AF_INET:
+            return (host, self._port)
+        return (host, self._port, 0, 0) # the latter two are indeterminate
+
+    def determine_af(self):
+        """determine the address family"""
+        if self.atyp == 1:
+            return socket.AF_INET
+        elif self.atyp == 4:
+            return socket.AF_INET6
+        elif ':' in self._addr:
+            return socket.AF_INET6
+        return socket.AF_INET
+
+    def unpack_addr(self):
+        """return the IP address string or domain name in *.ADDR"""
+        if self.atyp == 3:
+            return self._addr
+        return socket.inet_ntop(self.determine_af(), self._addr)
 
     def update_addrinfo(self):
         """set ATYP based on *.ADDR"""

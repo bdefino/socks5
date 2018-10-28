@@ -13,8 +13,6 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "socks5"
-
 import socket
 
 import auth

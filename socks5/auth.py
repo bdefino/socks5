@@ -13,11 +13,30 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "socks5"
-
-import auth
-import client
 import protocol
-import server
 
-__doc__ = "a simple RFC 1928-compliant SOCKS5 library"
+__doc__ = "connection authenticator/authorization"
+######implement infrastucture for future use of authentication
+
+class Auth:
+    def __init__(self, conn, authenticate = False):
+        self.conn = conn
+    
+    def __call__(self):##########
+        method_query = protocol.method.MethodQuery()
+        
+        try:
+            method_query.fload(self.conn.makefile())
+            self.conn.sendall(str(protocol.method.MethodResponse())) # no auth
+        except socket.error:
+            return
+        return self.conn
+
+class AuthError(protocol.error.SOCKS5Error):
+    pass
+
+class Authenticator:
+    pass
+
+class Authorizer:
+    pass

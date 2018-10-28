@@ -13,7 +13,7 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = "threaded"
+__package__ = __name__
 
 import Queue
 import thread
@@ -29,6 +29,23 @@ class FuncInfo:
         self.func = func
         self.kwargs = kwargs
         self.output = output
+
+class IterableTask:
+    """a task with discrete steps"""
+    
+    def __init__(self):
+        pass
+
+    def __call__(self):
+        for step in self:
+            pass
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        """perform the next step (usually without a return value)"""
+        raise StopIteration()
 
 class Synchronized:
     def __init__(self, value = None):
@@ -153,3 +170,29 @@ class Iterative(Threaded):
 
                 if isinstance(self.output_queue, Queue.Queue):
                     self.output_queue.put(funcinfo)
+
+class Pipelining(Iterative):
+    """
+    iterate through pipelined tasks;
+    tasks must subclass be iterable, preferable subclassing IterableTask
+    
+    this class continually requeues unfinished tasks
+    """
+    
+    def __init__(self, *args, **kwargs):
+        Iterative.__init__(self, *args, **kwargs)
+
+    def execute(self, iterable_task):
+        """accepts iterable tasks instead of functions"""
+        if not hasattr(iterable_task, "__iter__"):
+            raise TypeError("iterable_task must be iterable")
+        Iterative.execute(self, lambda: self._wrap_iterable_task_next(
+            iterable_task))
+
+    def _wrap_iterable_task_next(self, iterable_task):
+        try:
+            retval = iterable_task.next()
+        except StopIteration:
+            return
+        self.execute(lambda: self._wrap_iterable_task_next(iterable_task))
+        return retval
