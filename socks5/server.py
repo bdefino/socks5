@@ -330,11 +330,11 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         3: UDPAssociateRequestHandler}
     
     def next(self):
+        address_string = baseserver.straddress.straddress(self.event.remote)
         fp = self.event.conn.makefile()
         request_header = protocol.header.TCPRequestHeader()
         
-        self.event.server.sprint("Handling connection with",
-            baseserver.straddress.straddress(self.event.remote))
+        self.event.server.sprint("Handling connection with", address_string)
         
         try:
             wrapped_conn = auth.Auth(self.event.conn)()
@@ -356,8 +356,7 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                 "ERROR while handling connection with %s:\n" % address_string,
                 traceback.format_exc())
         finally:
-            self.event.server.sprint("Closing connection with",
-                baseserver.straddress.straddress(self.event.remote))
+            self.event.server.sprint("Closing connection with", address_string)
             self.event.conn.close()
         raise StopIteration()
 
@@ -375,7 +374,7 @@ class Server(baseserver.server.BaseTCPServer):
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
-class IterativeServer(baseserver.server.BaseIterativeTCPServer):
+class IterativeServer(baseserver.threaded.Iterative, Server):
     def __init__(self, event_class = baseserver.event.ConnectionEvent,
             event_handler_class = baseserver.eventhandler.ConnectionHandler,
             address = baseserver.server.best_address(1080), backlog = 100,
