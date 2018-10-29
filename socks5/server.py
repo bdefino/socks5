@@ -29,7 +29,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ######test everything
 #######play with sleep values
 ########integrate CLI
-############integrate handler-created servers with baseserver
+############integrate handler-created servers with baseserver?
 ##########finish UDPAssociateRequestHandler
 ###########improve security
 ##########make sure that all error chains give proper feedback
@@ -89,7 +89,7 @@ class BindRequestHandler(BaseRequestHandler):
         self.target_remote = None
     
     def accept_first(self):
-        """accept the first connection"""
+        """accept the first connection on BND.*"""
         server_sock = None
         
         try:
@@ -176,6 +176,7 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.event.request_header.determine_af(), socket.SOCK_STREAM)
             self.target_conn.settimeout(self.event.server.conn_inactive)
             self.target_conn.connect(self.event.request_header.address_tuple())
+            
             self.pipe_sockets_handler = PipeSocketsHandler(PipeSocketsEvent(
                 self.event.conn, self.target_conn, self.event.server))
             self.reply.bnd_addr, self.reply.bnd_port \
@@ -184,15 +185,17 @@ class ConnectRequestHandler(BaseRequestHandler):
             self.reply.errno(e.args[0], connect = True)
             self.target_conn.close()
             self.target_conn = None
-        
-        try:
-            self.event.conn.settimeout(self.event.server.timeout)
-            self.event.conn.sendall(str(self.reply))
+        finally:
+            try:
+                self.event.conn.settimeout(self.event.server.timeout)
+                self.event.conn.sendall(str(self.reply))
+            except socket.error:
+                if self.target_conn:
+                    self.target_conn.close()
+                    self.target_conn = None
 
             if not self.target_conn:
                 raise StopIteration()
-        except socket.error:
-            raise StopIteration()
 
     def next(self):
         if self.target_conn:
@@ -203,7 +206,7 @@ class ConnectRequestHandler(BaseRequestHandler):
         """pipe data between the client and the connection with DST.*"""
         try:
             self.pipe_sockets_handler.next()
-        except StopIteration: # shutdown procedure
+        except StopIteration:
             if self.target_conn:
                 self.target_conn.close()
             raise StopIteration()
@@ -284,6 +287,7 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
     UDP request messages to be relayed.
     """###############support fragmentation?
     ###################integrate steppability
+    ##########near-complete rewrite
     
     def __call__(self):
         bound = False
