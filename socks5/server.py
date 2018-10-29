@@ -32,6 +32,7 @@ __doc__ = """a simple SOCKS5 server framework"""
 ############integrate handler-created servers with baseserver
 ##########finish UDPAssociateRequestHandler
 ###########improve security
+##########make sure that all error chains give proper feedback
 
 def open_config(path):
     """
@@ -83,50 +84,55 @@ class BindRequestHandler(BaseRequestHandler):
         self.event.conn.settimeout(self.event.server.timeout)
         self.pipe_handler = None
         self.server_reply = protocol.header.TCPReplyHeader()
-        self.server_sock = None
         self.start = time.time()
         self.target_conn = None
         self.target_remote = None
     
     def accept_first(self):
+        """accept the first connection"""
+        server_sock = None
+        
         try:
-            self.server_sock = socket.socket(self.event.server.af,
+            server_sock = socket.socket(self.event.server.af,
                 socket.SOCK_STREAM)
-            self.server_sock.bind((self.event.request_header.unpack_addr(), 0))
-            self.server_sock.listen(1)
-            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR,
-                1)
-            self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT,
-                1)
+            server_sock.bind((self.event.request_header.unpack_addr(), 0))
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             self.server_sock.settimeout(self.event.server.conn_inactive)
             self.server_reply.bnd_addr, self.server_reply.bnd_port \
-                = self.server_sock.getsockname()
-            
-            self.event.conn.settimeout(self.event.server.timeout)
-            self.event.conn.sendall(str(self.server_reply))
+                = server_sock.getsockname()
+            server_sock.listen(1)
         except socket.error as e:
             self.server_reply.errno(e.args[0], bind = True)
-            raise StopIteration()
-
-        try:
+            server_sock = None
+        finally:
             try:
-                self.target_conn, self.target_remote \
-                    = self.server_sock.accept()
-                self.conn_reply.bnd_addr, self.conn_reply.bnd_port \
-                    = self.target_remote
-                self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
-                    self.target_conn, self.event.server))
+                self.event.conn.settimeout(self.event.server.timeout)
+                self.event.conn.sendall(str(self.server_reply))
             except socket.error as e:
-                self.conn_reply.errno(e.args[0], accept = True)
-
+                if server_sock:
+                    server_sock.close()
+                    server_sock = None
+        
+        if not server_sock:
+            raise StopIteration()
+        
+        try:
+            self.target_conn, self.target_remote = server_sock.accept()
+            self.conn_reply.bnd_addr, self.conn_reply.bnd_port \
+                = self.target_remote
+            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
+                self.target_conn, self.event.server))
+        except socket.error as e:
+            self.conn_reply.errno(e.args[0], accept = True)
+        finally:
             try:
                 self.event.conn.sendall(str(self.conn_reply))
             except socket.error:
                 if self.target_conn:
-                    target_conn.close()
-                raise StopIteration()
-        finally:
-            self.server_sock.close()
+                    selt.target_conn.close()
+                    self.target_conn = None
+            server_sock.close()
             
             if not self.target_conn:
                 raise StopIteration()
@@ -137,6 +143,7 @@ class BindRequestHandler(BaseRequestHandler):
         return self.accept_first()
     
     def pipe(self):
+        """pipe the next chunk of data"""
         try:
             self.pipe_handler.next()
         except StopIteration:
@@ -161,17 +168,12 @@ class ConnectRequestHandler(BaseRequestHandler):
         self.pipe_sockets_handler = None
         self.reply = protocol.header.TCPReplyHeader()
         self.target_conn = None
-
-    def __call__(self):###################debugging
-        try:
-            baseserver.threaded.IterableTask.__call__(self)
-        except Exception as e:
-            self.event.server.sfprint(sys.stderr, traceback.format_exc())
     
     def connect(self):
+        """attempt to connect to DST.*"""
         try:
-            self.target_conn = socket.socket(self.event.request_header.determine_af(),
-                socket.SOCK_STREAM)
+            self.target_conn = socket.socket(
+                self.event.request_header.determine_af(), socket.SOCK_STREAM)
             self.target_conn.settimeout(self.event.server.conn_inactive)
             self.target_conn.connect(self.event.request_header.address_tuple())
             self.pipe_sockets_handler = PipeSocketsHandler(PipeSocketsEvent(
@@ -186,6 +188,9 @@ class ConnectRequestHandler(BaseRequestHandler):
         try:
             self.event.conn.settimeout(self.event.server.timeout)
             self.event.conn.sendall(str(self.reply))
+
+            if not self.target_conn:
+                raise StopIteration()
         except socket.error:
             raise StopIteration()
 
@@ -195,9 +200,10 @@ class ConnectRequestHandler(BaseRequestHandler):
         return self.connect()
 
     def pipe_sockets(self):
+        """pipe data between the client and the connection with DST.*"""
         try:
             self.pipe_sockets_handler.next()
-        except StopIteration:
+        except StopIteration: # shutdown procedure
             if self.target_conn:
                 self.target_conn.close()
             raise StopIteration()

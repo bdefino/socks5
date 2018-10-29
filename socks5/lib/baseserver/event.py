@@ -22,8 +22,8 @@ class Event:
         self.parent = parent
 
 class ServerEvent(Event):
-    def __init__(self, *args, **kwargs):
-        Event.__init__(self, *args, **kwargs)
+    def __init__(self, server = None):
+        Event.__init__(self, server)
         self.server = self.parent
 
 class ConnectionEvent(ServerEvent):

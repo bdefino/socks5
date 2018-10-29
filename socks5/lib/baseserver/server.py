@@ -68,16 +68,22 @@ class BaseServer(socket.socket, threaded.Threaded):
         self.threaded_class = threaded_class # useful information
         self.timeout = timeout
 
-    def __call__(self):
+    def __call__(self, max_events = -1):
         address_string = straddr.straddr(self.address)
         self.sprint("Started", self.name, "server on", address_string)
         
         try:
-            for event in self:
-                self.execute(self.event_handler_class(event))
+            if max_events:
+                for event in self:
+                    max_events -= 1
+                    self.execute(self.event_handler_class(event))
+
+                    if not max_events:
+                        break
         except KeyboardInterrupt:
-            self.alive.set(False)
+            pass
         finally:
+            self.alive.set(False)
             self.sprint("Closing", self.name,
                 "server on %s..." % address_string)
             self.shutdown(socket.SHUT_RDWR)
