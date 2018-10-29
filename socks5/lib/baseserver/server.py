@@ -21,7 +21,7 @@ import time
 import event
 import eventhandler
 from lib import threaded
-import straddress
+import straddr
 
 __doc__ = "server core implementation"
 
@@ -69,7 +69,7 @@ class BaseServer(socket.socket, threaded.Threaded):
         self.timeout = timeout
 
     def __call__(self):
-        address_string = straddress.straddress(self.address)
+        address_string = straddr.straddr(self.address)
         self.sprint("Started", self.name, "server on", address_string)
         
         try:

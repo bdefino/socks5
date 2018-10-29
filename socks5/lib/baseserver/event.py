@@ -22,9 +22,9 @@ class Event:
         self.parent = parent
 
 class ServerEvent(Event):
-    def __init__(self, server, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         Event.__init__(self, *args, **kwargs)
-        self.server = server
+        self.server = self.parent
 
 class ConnectionEvent(ServerEvent):
     def __init__(self, conn, remote, *args, **kwargs):

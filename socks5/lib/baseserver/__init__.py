@@ -17,8 +17,8 @@ __package__ = __name__
 
 import event
 import eventhandler
-import server
-import straddress
 from lib import threaded
+import server
+import straddr
 
 __doc__ = "a simple server framework"

@@ -48,12 +48,18 @@ class ForkingEventHandler(EventHandler):
     but also preserves steppability within the resulting process
     """
     
-    def __init__(self, *args, **kwargs):
-        EventHandler.__init__(self, *args, **kwargs)
+    def __init__(self, event_handler_class = EventHandler, *args, **kwargs):
+        event_handler_class.__init__(self, *args, **kwargs)
+        self.event_handler_class = event_handler_class
         self.pid = None
 
     def __call__(self, kill_parent = False):
-        """fork before execution"""
+        """fork, then execute"""
+        self._ensure_forked()
+        threaded.IterableTask.__call__(self)
+
+    def _ensure_forked(self):
+        """fork if the PID was unchanged"""
         if self.pid == None:
             self.pid = os.fork()
 
@@ -63,4 +69,15 @@ class ForkingEventHandler(EventHandler):
                 if kill_parent:
                     sys.exit(0)
                 return
-        threaded.IterableTask.__call__(self)
+
+class ForkingConnectionHandler(ConnectionHandler, ForkingEventHandler):
+    def __init__(self, *args, **kwargs):
+        ForkingEventHandler.__init__(self, ConnectionHandler, *args, **kwargs)
+
+class ForkingDatagramHandler(DatagramHandler, ForkingEventHandler):
+    def __init__(self, *args, **kwargs):
+        ForkingEventHandler.__init__(self, DatagramHandler, *args, **kwargs)
+
+class ForkingDummyHandler(DummyHandler, ForkingEventHandler):
+    def __init__(self, *args, **kwargs):
+        ForkingEventHandler.__init__(self, DummyHandler, *args, **kwargs)

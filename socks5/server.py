@@ -330,7 +330,7 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         3: UDPAssociateRequestHandler}
     
     def next(self):
-        address_string = baseserver.straddress.straddress(self.event.remote)
+        address_string = baseserver.straddr.straddr(self.event.remote)
         fp = self.event.conn.makefile()
         request_header = protocol.header.TCPRequestHeader()
         
