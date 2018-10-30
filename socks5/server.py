@@ -370,30 +370,54 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             self.event.conn.close()
         raise StopIteration()
 
-class Server(baseserver.server.BaseTCPServer):
+class IterativeServer(baseserver.server.BaseIterativeTCPServer):
     def __init__(self, address = baseserver.server.best_address(1080),
-            backlog = 100, buflen = 65536, conn_inactive = None,
-            conn_sleep = 0.001, event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = TCPConnectionHandler, name = "SOCKS5",
-            nthreads = -1, tcp_buflen = 65536,
-            threaded_class = baseserver.threaded.Threaded, timeout = 0.001,
-            udp_buflen = 512):
-        baseserver.server.BaseTCPServer.__init__(self, address, backlog,
-            buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, threaded_class, timeout)
+            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
+            event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = TCPConnectionHandler,
+            name = "iterative SOCKS5", nthreads = -1, queue_output = False,
+            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+        baseserver.server.BaseIterativeTCPServer.__init__(self, address,
+            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
+            event_handler_class, name, nthreads, queue_output, timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
-class IterativeServer(baseserver.threaded.Iterative, Server):
-    def __init__(self, event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = baseserver.eventhandler.ConnectionHandler,
-            address = baseserver.server.best_address(1080), backlog = 100,
-            buflen = 65536, conn_inactive = None, conn_sleep = 0.001,
-            name = "iterative SOCKS5", nthreads = -1, tcp_buflen = 65536,
-            timeout = 0.001, udp_buflen = 512):
-        Server.__init__(self, address, backlog, buflen, conn_inactive,
-            conn_sleep, event_class, event_handler_class, name, nthreads,
-            baseserver.threaded.Iterative, timeout)
+class PipeliningServer(baseserver.server.BasePipeliningTCPServer):
+    def __init__(self, address = baseserver.server.best_address(1080),
+            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
+            event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = TCPConnectionHandler,
+            name = "pipelining SOCKS5", nthreads = -1, queue_output = False,
+            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+        baseserver.server.BasePipeliningTCPServer.__init__(self, address,
+            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
+            event_handler_class, name, nthreads, queue_output, timeout)
+        self.tcp_buflen = tcp_buflen
+        self.udp_buflen = udp_buflen
+
+class Server(baseserver.server.BaseTCPServer):
+    def __init__(self, address = baseserver.server.best_address(1080),
+            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
+            event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = TCPConnectionHandler, name = "SOCKS5",
+            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+        baseserver.server.BaseTCPServer.__init__(self, address, backlog,
+            tcp_buflen, lambda e: e(), conn_inactive, conn_sleep, event_class,
+            event_handler_class, name, timeout)
+        self.tcp_buflen = tcp_buflen
+        self.udp_buflen = udp_buflen
+
+class ThreadedServer(baseserver.server.BaseThreadedTCPServer):
+    def __init__(self, address = baseserver.server.best_address(1080),
+            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
+            event_class = baseserver.event.ConnectionEvent,
+            event_handler_class = TCPConnectionHandler,
+            name = "threaded SOCKS5", nthreads = -1, queue_output = False,
+            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+        baseserver.server.BaseThreadedTCPServer.__init__(self, address,
+            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
+            event_handler_class, name, nthreads, queue_output, timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
@@ -410,4 +434,4 @@ if __name__ == "__main__":
     
     #mkconfig
     
-    Server(**config)()
+    IterativeServer(**config)()

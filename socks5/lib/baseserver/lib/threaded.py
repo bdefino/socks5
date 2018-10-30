@@ -126,8 +126,7 @@ class Iterative(Threaded):
     
     def __init__(self, nthreads = 1, queue_output = False, sleep = 0.001):
         Threaded.__init__(self, nthreads, queue_output)
-        self.alive = True
-        self._alive_lock = thread.allocate_lock()
+        self.alive = Synchronized(True)
         self._input_queue = Queue.Queue()
         self.sleep = sleep
         
@@ -145,31 +144,32 @@ class Iterative(Threaded):
     
     def kill_all(self):
         """passively attempt to kill all the threads"""
-        with self._alive_lock:
-            self.alive = False
+        self.alive.set(False)
 
     def _slave(self):
         """continuously execute tasks"""
         while 1:
-            with self._alive_lock:
-                if not self.alive:
-                    break
-                funcinfo = None
+            if not self.alive.get():
+                break
+            funcinfo = None
+            
+            while not funcinfo:
+                if not self.alive.get():
+                    return
                 
-                while not funcinfo:
-                    try:
-                        funcinfo = self._input_queue.get()
-                    except ValueError:
-                        time.sleep(self.sleep)
-
                 try:
-                    funcinfo.output = funcinfo.func(*funcinfo.args,
-                        **funcinfo.kwargs)
-                except Exception as funcinfo.output:
-                    pass
+                    funcinfo = self._input_queue.get()
+                except ValueError:
+                    time.sleep(self.sleep)
 
-                if isinstance(self.output_queue, Queue.Queue):
-                    self.output_queue.put(funcinfo)
+            try:
+                funcinfo.output = funcinfo.func(*funcinfo.args,
+                    **funcinfo.kwargs)
+            except Exception as funcinfo.output:
+                pass
+
+            if isinstance(self.output_queue, Queue.Queue):
+                self.output_queue.put(funcinfo)
 
 class Pipelining(Iterative):
     """
