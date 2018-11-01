@@ -30,22 +30,13 @@ __doc__ = """a simple SOCKS5 server framework"""
 #######play with sleep values
 ########integrate CLI
 ############integrate handler-created servers with baseserver?
-##########finish UDPAssociateRequestHandler
+##########finish UDP implementation
 ###########improve security
 ##########make sure that all error chains give proper feedback
 
 def open_config(path):
-    """
-    factory function for a server configuration file
-    
-    this turns off autosync and fills in missing configuration values
-    """
-    config = conf.Conf(path, autosync = False)
-
-    for k, v in DEFAULT_CONFIG.items():
-        if not k in config:
-            config[k] = v
-    return config
+    """factory function for a server configuration file"""
+    return conf.Conf(path, autosync = False)
 
 class BaseRequestHandler(baseserver.eventhandler.EventHandler):
     pass
@@ -211,6 +202,10 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.target_conn.close()
             raise StopIteration()
 
+class DatagramHandler:
+    def __call__(self):######################
+        pass
+
 class PipeSocketsEvent(baseserver.event.ServerEvent):
     def __init__(self, a, b, server):
         baseserver.event.ServerEvent.__init__(self, server)
@@ -335,7 +330,13 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
             if server_sock:
                 server_sock.close()
 
-class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
+class UDPRequestHandler(BaseRequestHandler):
+    def __call__(self):###########################
+        raise NotImplementedError()
+
+class ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
+    """handler explicitly for SOCKS5 control connections"""
+    
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
     
@@ -353,7 +354,7 @@ class TCPConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                 self.event.conn = wrapped_conn
                 request_header.fload(self.event.conn.makefile())
                 
-                TCPConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
+                ConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
                     RequestEvent(request_header, self.event.conn,
                         self.event.remote, self.event.server))()
         except KeyError: # command not supported
@@ -374,12 +375,14 @@ class IterativeServer(baseserver.server.BaseIterativeTCPServer):
     def __init__(self, address = baseserver.server.best_address(1080),
             backlog = 100, conn_inactive = None, conn_sleep = 0.001,
             event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = TCPConnectionHandler,
-            name = "iterative SOCKS5", nthreads = -1, queue_output = False,
-            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+            event_handler_class = ConnectionHandler, name = "iterative SOCKS5",
+            nthreads = -1, queue_output = False, stderr = sys.stderr,
+            stdout = sys.stdout, tcp_buflen = 65536, timeout = 0.001,
+            udp_buflen = 512):
         baseserver.server.BaseIterativeTCPServer.__init__(self, address,
             backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, timeout)
+            event_handler_class, name, nthreads, queue_output, stderr, stdout,
+            timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
@@ -387,12 +390,14 @@ class PipeliningServer(baseserver.server.BasePipeliningTCPServer):
     def __init__(self, address = baseserver.server.best_address(1080),
             backlog = 100, conn_inactive = None, conn_sleep = 0.001,
             event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = TCPConnectionHandler,
+            event_handler_class = ConnectionHandler,
             name = "pipelining SOCKS5", nthreads = -1, queue_output = False,
-            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+            stderr = sys.stderr, stdout = sys.stdout, tcp_buflen = 65536,
+            timeout = 0.001, udp_buflen = 512):
         baseserver.server.BasePipeliningTCPServer.__init__(self, address,
             backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, timeout)
+            event_handler_class, name, nthreads, queue_output, stderr, stdout,
+            timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
@@ -400,11 +405,12 @@ class Server(baseserver.server.BaseTCPServer):
     def __init__(self, address = baseserver.server.best_address(1080),
             backlog = 100, conn_inactive = None, conn_sleep = 0.001,
             event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = TCPConnectionHandler, name = "SOCKS5",
-            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+            event_handler_class = ConnectionHandler, name = "SOCKS5",
+            stderr = sys.stderr, stdout = sys.stdout, tcp_buflen = 65536,
+            timeout = 0.001, udp_buflen = 512):
         baseserver.server.BaseTCPServer.__init__(self, address, backlog,
             tcp_buflen, lambda e: e(), conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, timeout)
+            event_handler_class, name, stderr, stdout, timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
@@ -412,26 +418,21 @@ class ThreadedServer(baseserver.server.BaseThreadedTCPServer):
     def __init__(self, address = baseserver.server.best_address(1080),
             backlog = 100, conn_inactive = None, conn_sleep = 0.001,
             event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = TCPConnectionHandler,
-            name = "threaded SOCKS5", nthreads = -1, queue_output = False,
-            tcp_buflen = 65536, timeout = 0.001, udp_buflen = 512):
+            event_handler_class = ConnectionHandler, name = "threaded SOCKS5",
+            nthreads = -1, queue_output = False, stderr = sys.stderr,
+            stdout = sys.stdout, tcp_buflen = 65536, timeout = 0.001,
+            udp_buflen = 512):
         baseserver.server.BaseThreadedTCPServer.__init__(self, address,
             backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, timeout)
+            event_handler_class, name, nthreads, queue_output, stderr, stdout,
+            timeout)
         self.tcp_buflen = tcp_buflen
         self.udp_buflen = udp_buflen
 
-class UDPDatagramHandler:
-    def __call__(self):######################
-        pass
-
-class UDPRequestHandler(BaseRequestHandler):
-    def __call__(self):###########################
-        raise NotImplementedError()
-
 if __name__ == "__main__":
     config = conf.Conf(autosync = False)
+    config["conn_inactive"] = 15
     
     #mkconfig
     
-    IterativeServer(**config)()
+    PipeliningServer(**config)()

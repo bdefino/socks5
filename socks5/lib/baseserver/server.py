@@ -43,9 +43,10 @@ class BaseServer(socket.socket):
     """
     
     def __init__(self, address = None, backlog = 100, buflen = 512,
-            callback = lambda e: None, event_class = event.DummyServerEvent,
-            event_handler_class = eventhandler.DummyHandler,
-            name = "base", socket_event_function_name = None, timeout = 0.001,
+            callback = lambda e: e(), event_class = event.DummyServerEvent,
+            event_handler_class = eventhandler.DummyHandler, name = "base",
+            socket_event_function_name = None, stderr = sys.stderr,
+            stdout = sys.stdout, timeout = 0.001,
             type = socket.SOCK_DGRAM):
         if not address: # use the best default address
             address = best_address()
@@ -62,7 +63,7 @@ class BaseServer(socket.socket):
             self.alive = threaded.Synchronized(True)
         elif not isinstance(getattr(self, "alive"), threaded.Synchronized):
             raise TypeError("conflicting types for \"alive\":" \
-                " multiple inheritance issue?")
+                " multiple inheritance?")
         self.backlog = backlog
         self.buflen = buflen
         self.callback = callback
@@ -77,6 +78,8 @@ class BaseServer(socket.socket):
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.settimeout(timeout)
         self.socket_event_function_name = socket_event_function_name
+        self.stderr = stderr
+        self.stdout = stdout
         self.timeout = timeout
 
     def __call__(self, max_events = -1):
@@ -117,8 +120,12 @@ class BaseServer(socket.socket):
             time.sleep(self.sleep)
     
     def sprint(self, *args):
-        """synchronized print"""
-        self.sfprint(sys.stdout, *args)
+        """synchronized print to stdout"""
+        self.sfprint(self.stdout, *args)
+
+    def sprinte(self, *args):
+        """synchronized print to stderr"""
+        self.sfprint(self.stderr, *args)
 
     def sfprint(self, fp, *args):
         """synchronized print to file"""
@@ -132,11 +139,12 @@ class BaseIterativeServer(BaseServer, threaded.Iterative):
             event_class = event.DummyServerEvent,
             event_handler_class = eventhandler.DummyHandler,
             name = "base iterative", nthreads = -1, queue_output = False,
-            socket_event_function_name = None, timeout = 0.001,
+            socket_event_function_name = None, stderr = sys.stderr,
+            stdout = sys.stdout, timeout = 0.001,
             type = socket.SOCK_DGRAM):
         BaseServer.__init__(self, address, backlog, buflen, self.execute,
             event_class, event_handler_class, name, socket_event_function_name,
-            timeout, type)
+            stderr, stdout, timeout, type)
         threaded.Iterative.__init__(self, nthreads, queue_output, self.timeout)
 
 class BaseIterativeTCPServer(BaseIterativeServer):
@@ -145,10 +153,10 @@ class BaseIterativeTCPServer(BaseIterativeServer):
             event_class = event.ConnectionEvent,
             event_handler_class = eventhandler.ConnectionHandler,
             name = "base iterative TCP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BaseIterativeServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "accept", timeout, socket.SOCK_STREAM)
+            "accept", stderr, stdout, timeout, socket.SOCK_STREAM)
         self.conn_inactive = conn_inactive # inactivity period before cleanup
         self.conn_sleep = conn_sleep
 
@@ -161,21 +169,21 @@ class BaseIterativeUDPServer(BaseIterativeServer):
             event_class = event.DatagramEvent,
             event_handler_class = eventhandler.DatagramHandler,
             name = "base iterative UDP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BaseIterativeServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "recvfrom", timeout)
+            "recvfrom", stderr, stdout, timeout)
 
 class BasePipeliningServer(BaseServer, threaded.Pipelining):
     def __init__(self, address = None, backlog = 100, buflen = 512,
             event_class = event.DummyServerEvent,
             event_handler_class = eventhandler.DummyHandler,
             name = "base pipelining", nthreads = -1, queue_output = False,
-            socket_event_function_name = None, timeout = 0.001,
-            type = socket.SOCK_DGRAM):
+            socket_event_function_name = None, stderr = sys.stderr,
+            stdout = sys.stdout, timeout = 0.001, type = socket.SOCK_DGRAM):
         BaseServer.__init__(self, address, backlog, buflen, self.execute,
             event_class, event_handler_class, name, socket_event_function_name,
-            timeout, type)
+            stderr, stdout, timeout, type)
         threaded.Pipelining.__init__(self, nthreads, queue_output,
             self.timeout)
 
@@ -185,10 +193,10 @@ class BasePipeliningTCPServer(BasePipeliningServer):
             event_class = event.ConnectionEvent,
             event_handler_class = eventhandler.ConnectionHandler,
             name = "base pipelining TCP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BasePipeliningServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "accept", timeout, socket.SOCK_STREAM)
+            "accept", stderr, stdout, timeout, socket.SOCK_STREAM)
         self.conn_inactive = conn_inactive # inactivity period before cleanup
         self.conn_sleep = conn_sleep
 
@@ -201,20 +209,21 @@ class BasePipeliningUDPServer(BasePipeliningServer):
             event_class = event.DatagramEvent,
             event_handler_class = eventhandler.DatagramHandler,
             name = "base pipelining UDP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BasePipeliningServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "recvfrom", timeout)
+            "recvfrom", stderr, stdout, timeout)
 
 class BaseTCPServer(BaseServer):
     def __init__(self, address = None, backlog = 100, buflen = 65536,
-            callback = lambda e: None, conn_inactive = None,
-            conn_sleep = 0.001, event_class = event.ConnectionEvent,
+            callback = lambda e: e(), conn_inactive = None, conn_sleep = 0.001,
+            event_class = event.ConnectionEvent,
             event_handler_class = eventhandler.ConnectionHandler,
-            name = "base TCP", timeout = 0.001):
+            name = "base TCP", stderr = sys.stderr, stdout = sys.stdout,
+            timeout = 0.001):
         BaseServer.__init__(self, address, backlog, buflen, callback,
-            event_class, event_handler_class, name, "accept", timeout,
-            socket.SOCK_STREAM)
+            event_class, event_handler_class, name, "accept", stderr, stdout,
+            timeout, socket.SOCK_STREAM)
         self.conn_inactive = conn_inactive # inactivity period before cleanup
         self.conn_sleep = conn_sleep
 
@@ -226,12 +235,12 @@ class BaseThreadedServer(BaseServer, threaded.Threaded):
     def __init__(self, address = None, backlog = 100, buflen = 512,
             event_class = event.DummyServerEvent,
             event_handler_class = eventhandler.DummyHandler,
-            name = "base threaded", nthreads = -1, queue_output = False,
-            socket_event_function_name = None, timeout = 0.001,
-            type = socket.SOCK_DGRAM):
+            name = "base threaded", nthreads = -1, queue_output = False ,
+            socket_event_function_name = None, stderr = sys.stderr,
+            stdout = sys.stdout, timeout = 0.001, type = socket.SOCK_DGRAM):
         BaseServer.__init__(self, address, backlog, buflen, self.execute,
             event_class, event_handler_class, name, socket_event_function_name,
-            timeout, type)
+            stderr, stdout, timeout, type)
         threaded.Threaded.__init__(self, nthreads, queue_output)
 
 class BaseThreadedTCPServer(BaseThreadedServer):
@@ -240,10 +249,10 @@ class BaseThreadedTCPServer(BaseThreadedServer):
             event_class = event.ConnectionEvent,
             event_handler_class = eventhandler.ConnectionHandler,
             name = "base iterative TCP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BaseThreadedServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "accept", timeout, socket.SOCK_STREAM)
+            "accept", stderr, stdout, timeout, socket.SOCK_STREAM)
         self.conn_inactive = conn_inactive # inactivity period before cleanup
         self.conn_sleep = conn_sleep
 
@@ -256,16 +265,17 @@ class BaseThreadedUDPServer(BaseThreadedServer):
             event_class = event.DatagramEvent,
             event_handler_class = eventhandler.DatagramHandler,
             name = "base threaded UDP", nthreads = -1, queue_output = False,
-            timeout = 0.001):
+            stderr = sys.stderr, stdout = sys.stdout, timeout = 0.001):
         BaseThreadedServer.__init__(self, address, backlog, buflen,
             event_class, event_handler_class, name, nthreads, queue_output,
-            "recvfrom", timeout)
+            "recvfrom", stderr, stdout, timeout)
 
 class BaseUDPServer(BaseServer):
-    def __init__(self, address = None,
-            backlog = 100, buflen = 512, callback = lambda e: None,
-            event_class = event.DatagramEvent,
+    def __init__(self, address = None, backlog = 100, buflen = 512,
+            callback = lambda e: e(), event_class = event.DatagramEvent,
             event_handler_class = eventhandler.DatagramHandler,
-            name = "base UDP", timeout = 0.001):
+            name = "base UDP", stderr = sys.stderr, stdout = sys.stdout,
+            timeout = 0.001):
         BaseServer.__init__(self, address, backlog, buflen, callback,
-            event_class, event_handler_class, name, "recvfrom", timeout)
+            event_class, event_handler_class, name, "recvfrom", stderr, stdout,
+            timeout)
