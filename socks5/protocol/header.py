@@ -240,8 +240,8 @@ class TCPReplyHeader(BaseTCPHeader):
         if connect:
             self.rep = 2
         
-        if e in ReplyHeader.ERRNO_TO_REP:
-            self.rep = ReplyHeader.ERRNO_TO_REP[e]
+        if e in TCPReplyHeader.ERRNO_TO_REP:
+            self.rep = TCPReplyHeader.ERRNO_TO_REP[e]
     
     def fload(self, fp):
         """load from a file-like object"""

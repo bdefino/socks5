@@ -52,14 +52,9 @@ class ForkingEventHandler(EventHandler):
         event_handler_class.__init__(self, *args, **kwargs)
         self.event_handler_class = event_handler_class
         self.pid = None
-
-    def __call__(self, kill_parent = False):
-        """fork, then execute"""
-        self._ensure_forked()
-        threaded.IterableTask.__call__(self)
-
-    def _ensure_forked(self):
-        """fork if the PID was unchanged"""
+    
+    def next(self):
+        """fork if the PID was unchanged, then execute and exit"""
         if self.pid == None:
             self.pid = os.fork()
 
@@ -68,7 +63,13 @@ class ForkingEventHandler(EventHandler):
             elif self.pid > 0:
                 if kill_parent:
                     sys.exit(0)
-                return
+            else: # execute then exit
+                try:
+                    self.event_handler_class.__call__(self)
+                except Exception:
+                    pass
+                sys.exit()
+        raise StopIteration()
 
 class ForkingConnectionHandler(ConnectionHandler, ForkingEventHandler):
     def __init__(self, *args, **kwargs):

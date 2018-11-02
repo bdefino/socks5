@@ -85,22 +85,19 @@ class BaseServer(socket.socket):
         if not hasattr(self, "alive"):
             self.alive = threaded.Synchronized(True)
         elif not isinstance(getattr(self, "alive"), threaded.Synchronized):
-            raise TypeError("conflicting types for \"alive\":" \
-                " multiple inheritance?")
+            raise TypeError("conflicting types for self.alive")
         self.callback = callback
         self.name = name
         self.sleep = 1.0 / self.backlog # optimal value
         self.bind(self.address)
-        self.address = self.getsockname() # by default, address is undefined
         self.print_lock = thread.allocate_lock()
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self.settimeout(self.timeout)
         
-        if not self.socket_event_function_name \
-                or not hasattr(self, self.socket_event_function_name):
-            raise ValueError("socket_event_function_name must be a socket" \
-                " function")
+        if self.socket_event_function_name \
+                and not hasattr(self, self.socket_event_function_name):
+            raise ValueError("socket_event_function_name is unusable")
         self.stderr = stderr
         self.stdout = stdout
     
