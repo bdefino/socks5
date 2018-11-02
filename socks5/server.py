@@ -339,13 +339,14 @@ class ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
-    
-    def next(self):
-        address_string = baseserver.straddr.straddr(self.event.remote)
-        fp = self.event.conn.makefile()
+
+    def __init__(self, *args, **kwargs):
+        baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
+            **kwargs)
+        self.address_string = baseserver.straddr.straddr(self.event.remote)
         request_header = protocol.header.TCPRequestHeader()
-        
-        self.event.server.sprint("Handling connection with", address_string)
+        self.event.server.sprint("Handling connection with",
+            self.address_string)
         
         try:
             wrapped_conn = auth.Auth(self.event.conn)()
@@ -354,85 +355,52 @@ class ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                 self.event.conn = wrapped_conn
                 request_header.fload(self.event.conn.makefile())
                 
-                ConnectionHandler.CMD_TO_HANDLER[request_header.cmd](
-                    RequestEvent(request_header, self.event.conn,
-                        self.event.remote, self.event.server))()
+                self.request_handler = ConnectionHandler.CMD_TO_HANDLER[
+                    request_header.cmd](RequestEvent(request_header,
+                        self.event.conn, self.event.remote, self.event.server))
         except KeyError: # command not supported
             try:
                 self.event.conn.sendall(str(header.ReplyHeader(rep = 7)))
             except socket.error:
                 pass
-        except Exception as e:
+            self.request_handler = None
+        except Exception:
             self.event.server.sfprint(sys.stderr,
-                "ERROR while handling connection with %s:\n" % address_string,
-                traceback.format_exc())
-        finally:
-            self.event.server.sprint("Closing connection with", address_string)
-            self.event.conn.close()
+                "ERROR while handling connection with %s:\n"
+                    % self.address_string, traceback.format_exc())
+            self.request_handler = None
+    
+    def next(self):
+        if self.event.server.alive.get() and self.request_handler:
+            try:
+                return self.request_handler.next()
+            except StopIteration:
+                pass
+            except Exception:
+                self.event.server.sfprint(sys.stderr,
+                    "ERROR while handling connection with %s:\n"
+                        % self.address_string, traceback.format_exc())
+        self.event.server.sprint("Closing connection with",
+            self.address_string)
+        self.event.conn.close()
         raise StopIteration()
 
-class IterativeServer(baseserver.server.BaseIterativeTCPServer):
-    def __init__(self, address = baseserver.server.best_address(1080),
-            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
-            event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = ConnectionHandler, name = "iterative SOCKS5",
-            nthreads = -1, queue_output = False, stderr = sys.stderr,
-            stdout = sys.stdout, tcp_buflen = 65536, timeout = 0.001,
-            udp_buflen = 512):
-        baseserver.server.BaseIterativeTCPServer.__init__(self, address,
-            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, stderr, stdout,
-            timeout)
-        self.tcp_buflen = tcp_buflen
-        self.udp_buflen = udp_buflen
-
-class PipeliningServer(baseserver.server.BasePipeliningTCPServer):
-    def __init__(self, address = baseserver.server.best_address(1080),
-            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
-            event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = ConnectionHandler,
-            name = "pipelining SOCKS5", nthreads = -1, queue_output = False,
-            stderr = sys.stderr, stdout = sys.stdout, tcp_buflen = 65536,
-            timeout = 0.001, udp_buflen = 512):
-        baseserver.server.BasePipeliningTCPServer.__init__(self, address,
-            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, stderr, stdout,
-            timeout)
-        self.tcp_buflen = tcp_buflen
-        self.udp_buflen = udp_buflen
-
-class Server(baseserver.server.BaseTCPServer):
-    def __init__(self, address = baseserver.server.best_address(1080),
-            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
-            event_class = baseserver.event.ConnectionEvent,
+class Server(baseserver.server.BaseServer):
+    def __init__(self, address = baseserver.server.best_address(),
             event_handler_class = ConnectionHandler, name = "SOCKS5",
-            stderr = sys.stderr, stdout = sys.stdout, tcp_buflen = 65536,
-            timeout = 0.001, udp_buflen = 512):
-        baseserver.server.BaseTCPServer.__init__(self, address, backlog,
-            tcp_buflen, lambda e: e(), conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, stderr, stdout, timeout)
-        self.tcp_buflen = tcp_buflen
-        self.udp_buflen = udp_buflen
-
-class ThreadedServer(baseserver.server.BaseThreadedTCPServer):
-    def __init__(self, address = baseserver.server.best_address(1080),
-            backlog = 100, conn_inactive = None, conn_sleep = 0.001,
-            event_class = baseserver.event.ConnectionEvent,
-            event_handler_class = ConnectionHandler, name = "threaded SOCKS5",
-            nthreads = -1, queue_output = False, stderr = sys.stderr,
-            stdout = sys.stdout, tcp_buflen = 65536, timeout = 0.001,
-            udp_buflen = 512):
-        baseserver.server.BaseThreadedTCPServer.__init__(self, address,
-            backlog, tcp_buflen, conn_inactive, conn_sleep, event_class,
-            event_handler_class, name, nthreads, queue_output, stderr, stdout,
-            timeout)
-        self.tcp_buflen = tcp_buflen
+            udp_buflen = baseserver.server.BaseServer.DEFAULTS[
+                socket.SOCK_DGRAM]["buflen"], **kwargs):
+        baseserver.server.BaseServer.__init__(self, socket.SOCK_STREAM,
+            address = address, event_handler_class = event_handler_class,
+            name = name, **kwargs)
+        self.tcp_buflen = self.buflen
         self.udp_buflen = udp_buflen
 
 if __name__ == "__main__":
     config = conf.Conf(autosync = False)
-    config["conn_inactive"] = 15
-    
+
     #mkconfig
     
-    PipeliningServer(**config)()
+    server = Server(address = ("::1", 1080, 0 , 0), **config)
+    server.thread(baseserver.threaded.Pipelining(nthreads = 1))
+    server()

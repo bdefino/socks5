@@ -17,6 +17,7 @@ __package__ = __name__
 
 import auth
 import client
+from lib import conf
 import protocol
 import server
 

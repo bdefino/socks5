@@ -21,4 +21,13 @@ from lib import threaded
 import server
 import straddr
 
-__doc__ = "a simple server framework"
+__doc__ = """
+a simple server framework
+
+basic flow:
+    1. if there's a kill order, stop
+    2. listen for an event
+    3. create a handler for the event
+    4. pass the handler to the callback
+    5. repeat from step 1
+"""

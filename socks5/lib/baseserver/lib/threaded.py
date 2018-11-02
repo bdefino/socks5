@@ -173,8 +173,8 @@ class Iterative(Threaded):
 
 class Pipelining(Iterative):
     """
-    iterate through pipelined tasks;
-    tasks must subclass be iterable, preferable subclassing IterableTask
+    pipeline iterable tasks;
+    tasks must be iterable, preferably subclassing IterableTask
     
     this class continually requeues unfinished tasks
     """
@@ -190,9 +190,11 @@ class Pipelining(Iterative):
             iterable_task))
 
     def _wrap_iterable_task_next(self, iterable_task):
+        """execute then requeue if necessary"""
         try:
             retval = iterable_task.next()
         except StopIteration:
             return
-        self.execute(lambda: self._wrap_iterable_task_next(iterable_task))
+        Iterative.execute(self, lambda: self._wrap_iterable_task_next(
+            iterable_task))
         return retval
