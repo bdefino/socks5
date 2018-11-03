@@ -27,12 +27,10 @@ import protocol
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
 ######test everything
-#######play with sleep values
 ########integrate CLI
 ############integrate handler-created servers with baseserver?
 ##########finish UDP implementation
 ###########improve security
-##########make sure that all error chains give proper feedback
 
 def open_config(path):
     """factory function for a server configuration file"""
@@ -382,9 +380,8 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                         % self.address_string, traceback.format_exc())
         self.event.server.sprint("Closing connection with",
             self.address_string)
-        self.event.conn.close()
         self.request_handler = None
-        raise StopIteration()
+        baseserver.eventhandler.ConnectionHandler.next(self)
 
 class SOCKS5Server(baseserver.baseserver.BaseServer):
     def __init__(self, address = baseserver.baseserver.best_address(),

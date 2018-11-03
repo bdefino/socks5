@@ -34,7 +34,24 @@ class EventHandler(threaded.IterableTask):
         self.parent = parent
 
 class ConnectionHandler(EventHandler):
-    pass
+    """close the connection upon completion"""
+    
+    def next(self):
+        """
+        shutdown/close the connection
+        
+        subclasses should call this upon completion
+        """
+        try:
+            self.event.conn.shutdown(socket.SHUT_RDWR)
+        except socket.error:
+            pass
+
+        try:
+            self.event.conn.close()
+        except socket.error:
+            pass
+        raise StopIteration()
 
 class DatagramHandler(EventHandler):
     pass
