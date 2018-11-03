@@ -368,3 +368,6 @@ class BaseHTTPServer(baseserver.BaseServer):
             _resolver = lambda r: os.path.normpath(r).lstrip('/')
         self.resolver = lambda r: os.path.join(root, _resolver(r))
         self.root = root
+
+        if not os.path.exists(self.root):
+            os.makedirs(self.root)
