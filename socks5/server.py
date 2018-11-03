@@ -38,7 +38,7 @@ def open_config(path):
     """factory function for a server configuration file"""
     return conf.Conf(path, autosync = False)
 
-class BaseRequestHandler(baseserver.EventHandler):
+class BaseRequestHandler(baseserver.eventhandler.EventHandler):
     pass
 
 class BindRequestHandler(BaseRequestHandler):
@@ -202,22 +202,22 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.target_conn.close()
             raise StopIteration()
 
-class DatagramHandler(baseserver.DatagramHandler):
+class DatagramHandler(baseserver.eventhandler.DatagramHandler):
     def __call__(self):######################
         pass
 
-class PipeSocketsEvent(baseserver.ServerEvent):
+class PipeSocketsEvent(baseserver.event.ServerEvent):
     def __init__(self, a, b, server):
-        baseserver.ServerEvent.__init__(self, server)
+        baseserver.event.ServerEvent.__init__(self, server)
         self.a = a
         self.b = b
 
-class PipeSocketsHandler(baseserver.EventHandler):
+class PipeSocketsHandler(baseserver.eventhandler.EventHandler):
     """bidirectional socket relay"""
     
     def __init__(self, event):
-        baseserver.EventHandler.__init__(self, event)
-
+        baseserver.eventhandler.EventHandler.__init__(self, event)
+        
         for s in (self.event.a, self.event.b):
             s.settimeout(self.event.server.timeout)
         self.last = time.time()
@@ -255,9 +255,9 @@ class PipeSocketsHandler(baseserver.EventHandler):
         self.event.a = self.event.b
         self.event.b = temp
 
-class RequestEvent(baseserver.ConnectionEvent):
+class RequestEvent(baseserver.event.ConnectionEvent):
     def __init__(self, request_header, *args, **kwargs):
-        baseserver.ConnectionEvent.__init__(self, *args, **kwargs)
+        baseserver.event.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request_header = request_header
 
 class ServerError(protocol.error.SOCKS5Error):
@@ -334,15 +334,16 @@ class UDPRequestHandler(BaseRequestHandler):
     def __call__(self):###########################
         raise NotImplementedError()
 
-class ConnectionHandler(baseserver.ConnectionHandler):
+class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     """handler explicitly for SOCKS5 control connections"""
     
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
 
     def __init__(self, *args, **kwargs):
-        baseserver.ConnectionHandler.__init__(self, *args, **kwargs)
-        self.address_string = baseserver.straddr(self.event.remote)
+        baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
+            **kwargs)
+        self.address_string = baseserver.straddr.straddr(self.event.remote)
         request_header = protocol.header.TCPRequestHeader()
         self.event.server.sprint("Handling connection with",
             self.address_string)
@@ -354,7 +355,7 @@ class ConnectionHandler(baseserver.ConnectionHandler):
                 self.event.conn = wrapped_conn
                 request_header.fload(self.event.conn.makefile())
                 
-                self.request_handler = ConnectionHandler.CMD_TO_HANDLER[
+                self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
                     request_header.cmd](RequestEvent(request_header,
                         self.event.conn, self.event.remote, self.event.server))
         except KeyError: # command not supported
@@ -382,14 +383,15 @@ class ConnectionHandler(baseserver.ConnectionHandler):
         self.event.server.sprint("Closing connection with",
             self.address_string)
         self.event.conn.close()
+        self.request_handler = None
         raise StopIteration()
 
-class Server(baseserver.BaseServer):
-    def __init__(self, address = baseserver.best_address(),
-            event_handler_class = ConnectionHandler, name = "SOCKS5",
-            udp_buflen = baseserver.BaseServer.DEFAULTS[socket.SOCK_DGRAM][
-                "buflen"], **kwargs):
-        baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
+class SOCKS5Server(baseserver.baseserver.BaseServer):
+    def __init__(self, address = baseserver.baseserver.best_address(),
+            event_handler_class = SOCKS5ConnectionHandler, name = "SOCKS5",
+            udp_buflen = baseserver.baseserver.BaseServer.DEFAULTS[
+                socket.SOCK_DGRAM]["buflen"], **kwargs):
+        baseserver.baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
             address = address, event_handler_class = event_handler_class,
             name = name, **kwargs)
         self.tcp_buflen = self.buflen
@@ -400,6 +402,6 @@ if __name__ == "__main__":
 
     #mkconfig
     
-    server = Server(address = ("::1", 1080, 0 , 0), **config)
+    server = SOCKS5Server(address = ("::1", 1080, 0 , 0), **config)
     server.thread(baseserver.threaded.Pipelining(nthreads = 1))
     server()

@@ -15,20 +15,31 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = __name__
 
-import basehttpserver
-import baseserver
-import event
-import eventhandler
-from lib import threaded
-import straddr
+import socket
 
-__doc__ = """
-a simple server framework
+__doc__ = "address strings"
 
-basic flow:
-    1. if there's a kill order, stop
-    2. listen for an event
-    3. create a handler for the event
-    4. pass the handler to the callback
-    5. repeat from step 1
-"""
+def parseaddr(url):
+    """parse a socket address from a URL"""
+    parsed = []
+    url = url.strip()
+
+    if not url:
+        raise ValueError("Empty URL")
+    parsed = url.rsplit(':', 1)
+
+    if parsed.startswith('['): # AF_INET6
+        parsed[0] = parsed[0][1:].rstrip(']')
+        parsed += [0, 0]
+    
+    try:
+        parsed[1] = int(parsed[1])
+    except ValueError:
+        raise ValueError("Invalid URL")
+    return tuple(parsed)
+
+def straddr(addr):
+    """convert an address to a URL"""
+    if len(addr) == 4:
+        return "[%s]:%u" % tuple(addr[:2])
+    return "%s:%u" % addr
