@@ -19,7 +19,7 @@ import Queue
 import thread
 import time
 
-__doc__ = "threaded callable representation"
+__doc__ = "threaded multitasking"
 
 class FuncInfo:
     """information about a function call"""

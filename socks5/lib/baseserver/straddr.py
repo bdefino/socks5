@@ -28,7 +28,7 @@ def parseaddr(url):
         raise ValueError("Empty URL")
     parsed = url.rsplit(':', 1)
 
-    if parsed.startswith('['): # AF_INET6
+    if parsed[0].startswith('['): # AF_INET6
         parsed[0] = parsed[0][1:].rstrip(']')
         parsed += [0, 0]
     
