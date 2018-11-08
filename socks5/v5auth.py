@@ -15,18 +15,18 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import socket
 
-import protocol
+import v5error
 
 __doc__ = "connection authenticator/authorization"
 ######implement infrastucture for future use of authentication
 
-class AuthError(protocol.error.SOCKS5Error):
+class AuthError(v5error.SOCKS5Error):
     pass
 
 class BaseAuth:
     """authorize/authenticate and wrap a socket"""
     
-    def __init__(self, conn, auth_required = False):
+    def __init__(self, conn, auth_required = False, server_side = False):
         self.auth_required = auth_required
         self.conn = conn
     
@@ -41,7 +41,7 @@ class GSSAPIAuth(BaseAuth):
     pass#####################
 
 class NoAuth(BaseAuth):
-    """doesn't wrap the socket"""
+    """doesn't wrap the socket (indicates failure)"""
     
     def __call__(self):
         return
@@ -59,8 +59,8 @@ class Auth(BaseAuth):
     
     def __call__(self):
         conn = None
-        method_query = protocol.method.MethodQuery()
-        method_response = protocol.method.MethodResponse()
+        method_query = protocol.v5.method.MethodQuery()
+        method_response = protocol.v5.method.MethodResponse()
         
         try:
             method_query.fload(self.conn.makefile())

@@ -15,10 +15,47 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = __name__
 
-import auth
-import client
+from lib import baseserver
 from lib import conf
-import protocol
-import server
+import v4client
+import v4error
+import v4header
+import v4method
+import v4server
+import v5auth
+import v5client
+import v5error
+import v5header
+import v5method
+import v5server
 
-__doc__ = "a simple RFC 1928-compliant SOCKS5 library"
+__doc__ = """
+SOCKS5 with backwards compatibility for SOCKS4
+
+when executed, runs a configurable SOCKS server (version 5 by default)
+"""
+
+def create_connection(address, timeout = None, source_address = None,
+        version = 5,):#########################################auth stuff
+    """socket.create_connection analog"""
+    pass###############################################
+
+def SOCKSServerFactory(version = 5, *args, **kwargs):
+    """return a version-specific server"""
+    try:
+        return {4: v4server.SOCKS4Server, 5: v5server.SOCKS5Server}[version](
+            *args, **kwargs)
+    except KeyError:
+        raise ValueError("unsupported SOCKS version (%u)" % version)
+
+def wrap_socket():
+    pass#############################################
+
+if __name__ == "__main__":
+    config = conf.Conf(autosync = False)
+    
+    #mkconfig
+    
+    server = SOCKSServerFactory(5, address = ("::1", 1080, 0 , 0), **config)
+    server.thread(baseserver.threaded.Pipelining(nthreads = 1))
+    server()

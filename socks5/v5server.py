@@ -19,10 +19,9 @@ import thread
 import time
 import traceback
 
-import auth
 from lib import baseserver
 from lib import conf
-import protocol
+import v5auth
 
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
@@ -258,9 +257,6 @@ class RequestEvent(baseserver.event.ConnectionEvent):
         baseserver.event.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request_header = request_header
 
-class ServerError(protocol.error.SOCKS5Error):
-    pass
-
 class UDPAssociateRequestHandler(BaseRequestHandler):
     """
     The UDP ASSOCIATE request is used to establish an association within
@@ -347,7 +343,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             self.address_string)
         
         try:
-            wrapped_conn = auth.Auth(self.event.conn)()
+            wrapped_conn = v5auth.Auth(self.event.conn, server_side = True)()
             
             if wrapped_conn: # authenticated/authorized
                 self.event.conn = wrapped_conn

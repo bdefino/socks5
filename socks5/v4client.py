@@ -15,8 +15,8 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import socket
 
-import auth
-import protocol
+import v4error
+import v4header
 
 __doc__ = "a simple SOCKS5 client"
 
@@ -46,16 +46,16 @@ class Client(socket.socket):
         establish a SOCKS5 control connection,
         and return the ResponseHeader or optionally complain
         """
-        response_header = protocol.header.TCPResponseHeader()
+        response_header = v4header.TCPResponseHeader()
         socket.socket.connect(self, address)
 
         if not request_header:
-            request_header = protocol.header.TCPRequestHeader()
+            request_header = v4header.TCPRequestHeader()
         self.sendall(str(request_header))
         
         try:
             response_header.fload(self)
-        except (protocol.error.ProtocolError, socket.error) as e:
+        except (socket.error, v4error.SOCKS4Error) as e:
             self.close()
 
             if complain:
@@ -64,6 +64,3 @@ class Client(socket.socket):
             if isinstance(e, socket.timeout): # no complaint, but no response
                 response_header = None
         return response_header
-
-class ClientError(protocol.error.SOCKS5Error):
-    pass

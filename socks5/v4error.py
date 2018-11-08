@@ -13,10 +13,7 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = __name__
+__doc__ = "SOCKS4 error"
 
-import error
-import header
-import method
-
-__doc__ = "a simple RFC 1928-compliant SOCKS5 library"
+class SOCKS4Error(RuntimeError):
+    pass

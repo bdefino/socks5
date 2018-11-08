@@ -13,8 +13,7 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-class SOCKS5Error(RuntimeError):
-    pass
+__doc__ = "SOCKS5 error"
 
-class ProtocolError(SOCKS5Error):
+class SOCKS5Error(RuntimeError):
     pass
