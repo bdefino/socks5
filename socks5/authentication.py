@@ -23,9 +23,7 @@ connection authentication
 
 this also handles the authentication method subnegotiation
 """
-####################################username/password implementation
-########migrate from individual authenticators to multi-method abstractions
-###################rethink API: OO vs. static methods
+######################################GSSAPI
 
 def wrap_socket(sock, server_side = False, *authenticators):
     """
@@ -47,9 +45,9 @@ class BaseAuthenticator:
         self.method = method
         self.server_side = server_side
 
-    def __call__(self, conn):
-        """MUST return a (wrapped) connection or None"""
-        return conn
+    def __call__(self, sock):
+        """MUST return (wrapped socket, authentication info) or complain"""
+        return sock, None
 
 class DelegatingAuthenticator(BaseAuthenticator):
     """abstraction for multiple authenticators"""
@@ -84,9 +82,14 @@ class FailingAuthenticator(BaseAuthenticator):
         raise AuthenticationError()
 
 class GSSAPIAuthenticator(BaseAuthenticator):
+    """authentication via GSSAPI"""
     ##########################################
+    
     def __init__(self, *args, **kwargs):
-        BaseAuth.__init__(self, 1, *args, **kwargs)
+        BaseAuthenticator.__init__(self, 1, *args, **kwargs)
+        raise NotImplementedError()##############################
+
+    def __call__(self, sock):###################################
         raise NotImplementedError()
 
 class MethodNegotiationError(error.SOCKS5Error):
@@ -113,7 +116,7 @@ class MethodNegotiator:
         try:
             sock.sendall(str(header.MethodQueryHeader(methods, len(methods))))
             response_header.fload(sock.makefile())
-        except socket.error as e:
+        except IOError as e:
             raise MethodNegotiationError(*e.args)
 
         if response_header.method == 255:
@@ -129,14 +132,14 @@ class MethodNegotiator:
         
         try:
             query_header.fload(sock.makefile())
-        except socket.error as e:
+        except IOError as e:
             raise MethodNegotiationError(*e.args)
         
         for m in query_header.methods:
             if m in accepted_methods:
                 selected_method = m
                 break
-
+        
         try:
             sock.sendall(str(header.MethodResponseHeader(selected_method)))
         except socket.error as e:
@@ -148,7 +151,6 @@ class MethodNegotiator:
 
 class UsernamePasswordAuthenticator(BaseAuthenticator):
     """RFC 1929-compliant authentication"""
-    ########################################
     
     def __init__(self, username_to_password = {}, *args, **kwargs):
         BaseAuthenticator.__init__(self, 2, *args, **kwargs)
@@ -156,10 +158,50 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
 
         if self.server_side:
             self.__call__ = self.authenticate_server_side
+        elif not len(username_to_password) == 1:
+            raise ValueError("exactly one username/password pair required")
         self.username_to_password = username_to_password
     
-    def authenticate_client_side(self, conn):
-        pass
+    def authenticate_client_side(self, sock):
+        """authenticate a socket as a client"""
+        response_header = header.UsernamePasswordResponseHeader()
+        username, password = self.username_to_password.items()[0]
+        
+        try:
+            sock.sendall(str(header.UsernamePasswordRequestHeader(password,
+                len(password), len(username), username)))
+            response_header.fload(sock.makefile())
+        except IOError as e:
+            raise AuthenticationError(*e.args)
 
-    def authenticate_server_side(self, conn):
-        pass
+        if response_header.status:
+            raise AuthenticationFailed()
+        return sock, None
+
+    def authenticate_server_side(self, sock):
+        """
+        authenticate a socket as a server
+        
+        return (wrapped socket, username) or complain
+        """
+        auth_info = None
+        request_header = header.UsernamePasswordRequestHeader()
+        status = 255
+        
+        try:
+            request_header.fload(sock.makefile())
+        except IOError as e:
+            raise AuthenticationError(*e.args)
+        expected_password = self.username_to_password.get(request_header.uname)
+
+        if expected_password and request_header.passwd == expected_password:
+            status = 0
+
+        try:
+            sock.sendall(str(header.UsernamePasswordResponseHeader(status)))
+        except socket.error as e:
+            raise AuthenticationError(*e.args)
+
+        if status:
+            raise AuthenticationFailed()
+        return sock, request_header.uname

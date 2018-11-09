@@ -346,8 +346,8 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             self.address_string)
         
         try:
-            self.event.conn = authentication.wrap_socket(self.event.conn, True,
-                *self.event.server.authenticators)
+            self.event.conn, auth_info = authentication.wrap_socket(
+                self.event.conn, True, *self.event.server.authenticators)
             request_header.fload(self.event.conn.makefile())
             self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
                 request_header.cmd](RequestEvent(request_header,

@@ -25,7 +25,7 @@ import server
 from server import serve, SOCKS5Server
 
 __doc__ = """
-SOCKS5
+a pure-python SOCKS5 library
 
 when executed, runs a configurable SOCKS soerver (version 5 by default)
 """
@@ -35,6 +35,6 @@ if __name__ == "__main__":
     config = conf.Conf(autosync = False)
     
     #mkconfig
-
+    
     threaded = baseserver.threaded.Pipelining(nthreads = 1)
     serve(threaded, **config)
