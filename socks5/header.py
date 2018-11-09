@@ -377,7 +377,7 @@ class UDPHeader(BaseSOCKS5UDPHeader):
     def __init__(self, *args, **kwargs):
         BaseSOCKS5UDPHeader.__init__(self, *args, **kwargs)
 
-class UsernamePasswordRequest:
+class UsernamePasswordRequestHeader:
     """
            +----+------+----------+------+----------+
            |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
@@ -405,7 +405,7 @@ class UsernamePasswordRequest:
         return "".join((pack.pack(self.ver, 1), pack.pack(self.ulen, 1),
             self.uname, pack.pack(self.plen, 1), self.passwd))
 
-class UsernamePasswordResponse:
+class UsernamePasswordResponseHeader:
     """
 
                         +----+--------+

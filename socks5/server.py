@@ -19,7 +19,8 @@ import thread
 import time
 import traceback
 
-from protocol import authentication, header
+import authentication
+import header
 from lib import baseserver, conf
 
 __doc__ = """a simple SOCKS5 server framework"""

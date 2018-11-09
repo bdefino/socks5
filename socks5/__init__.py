@@ -15,9 +15,14 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = __name__
 
-from lib import baseserver, conf
-import client, protocol, server
+import authentication
+import client
 from client import create_connection, wrap_socket
+import error
+import header
+from lib import baseserver, conf
+import pack
+import server
 from server import serve, SOCKS5Server
 
 __doc__ = """
@@ -25,6 +30,8 @@ SOCKS5
 
 when executed, runs a configurable SOCKS soerver (version 5 by default)
 """
+################clean code
+###############finish protocol.authentication
 
 if __name__ == "__main__":
     config = conf.Conf(autosync = False)

@@ -15,7 +15,9 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import socket
 
-from protocol import authentication, error, header
+import authentication
+import error
+import header
 
 __doc__ = "a simple SOCKS5 client"
 

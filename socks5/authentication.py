@@ -25,34 +25,18 @@ this also handles the authentication method subnegotiation
 """
 ####################################username/password implementation
 ########migrate from individual authenticators to multi-method abstractions
-"""
-desirable API:
+###################rethink API: OO vs. static methods
 
-class Authenticator:
-    def __init__(self):
-        pass
-    def __call__(self, conn):
-        pass
-"""
-class Authenticator(object):
-    """authentication method factory"""
-    
-    def __new__(self, method = 0, *args, **kwargs):
-        try:
-            return {0: DummyAuthenticator, 1: GSSAPIAuthenticator,
-                2: UsernamePasswordAuthenticator,
-                255: FailingAuthenticator}[method](*args, **kwargs)
-        except KeyError:
-            raise ValueError("unknown method")
+def negotiate_method(sock, methods = (0, ), server_side = False):
+    pass
 
-def wrap_socket(sock, methods = (0, ), server_side = False, *auth_args,
-        **auth_kwargs):
+def wrap_socket(sock, methods = (0, ), server_side = False, **auth_kwargs):
     """
     attempt to wrap a socket using the most
     desirable authentication method
     """
-    return Authenticator(MethodNegotiator(methods, server_side)(sock),
-        server_side, *auth_args, **auth_kwargs)(sock)
+    return Authenticator(MethodNegotiator.negotiate(sock, methods, server_side),
+        server_side, **auth_kwargs)(sock)
 
 class AuthenticationError(error.SOCKS5Error):
     pass
@@ -92,41 +76,38 @@ class MethodNegotiationFailed(MethodNegotiationError):
     pass
 
 class MethodNegotiator:
-    """negotiates authentication method"""
+    """negotiate authentication method"""
     
-    def __init__(self, methods = (0, ), server_side = False):
-        self.methods = methods
-        self.server_side = server_side
-    
-    def __call__(self, conn):
-        """return the agreed upon method or complain"""
-        if self.server_side:
-            return self.negotiate_server_side(conn)
-        return self.negotiate_client_side(conn)
+    @staticmethod
+    def negotiate(conn, methods = (0, ), server_side = False):
+        if server_side:
+            return MethodNegotiator.negotiate_server_side(conn, methods)
+        return MethodNegotiator.negotiate_client_side(conn, methods)
 
-    def negotiate_client_side(self, conn):
+    @staticmethod
+    def negotiate_client_side(conn, methods = (0, )):
         response_header = header.MethodResponseHeader()
         
         try:
-            conn.sendall(str(header.MethodQueryHeader(self.methods,
-                len(self.methods))))
+            conn.sendall(str(header.MethodQueryHeader(methods, len(methods))))
             response_header.fload(conn.makefile())
-        except socket.error:
-            raise MethodNegotiationError()
+        except socket.error as e:
+            raise MethodNegotiationError(*e.args)
 
         if response_header.method == 255:
             raise MethodNegotiationFailed()
         return response_header.method
-    
-    def negotiate_server_side(self, conn):
-        accepted_methods = {m: None for m in self.methods} # quick access
+
+    @staticmethod
+    def negotiate_server_side(conn, accepted_methods = (0, )):
+        accepted_methods = {m: None for m in accepted_methods} # quick access
         query_header = header.MethodQueryHeader()
         selected_method = 255
         
         try:
             query_header.fload(conn.makefile())
-        except socket.error:
-            raise MethodNegotiationError()
+        except socket.error as e:
+            raise MethodNegotiationError(*e.args)
         
         for m in query_header.methods:
             if m in accepted_methods:
@@ -136,12 +117,40 @@ class MethodNegotiator:
         try:
             conn.sendall(str(header.MethodResponseHeader(
                 selected_method)))
-        except socket.error:
-            raise MethodNegotiationError()
+        except socket.error as e:
+            raise MethodNegotiationError(*e.args)
         
         if selected_method == 255:
             raise MethodNegotiationFailed()
         return selected_method
 
 class UsernamePasswordAuthenticator(BaseAuthenticator):
-    pass########################################
+    """RFC 1929-compliant authentication"""
+    ########################################
+    
+    def __init__(self, server_side = False, username_to_password = {}, *args,
+            **kwargs):
+        BaseAuthenticator.__init__(self, server_side, *args, **kwargs)
+        self.__call__ = self.authenticate_client_side
+
+        if self.server_side:
+            self.__call__ = self.authenticate_server_side
+        self.username_to_password = username_to_password
+    
+    def authenticate_client_side(self, conn):
+        pass
+
+    def authenticate_server_side(self, conn):
+        pass
+
+class Authenticator(object):
+    """authentication method factory"""
+    METHOD_TO_AUTHENTICATOR = {0: DummyAuthenticator, 1: GSSAPIAuthenticator,
+        2: UsernamePasswordAuthenticator, 255: FailingAuthenticator}
+    
+    def __new__(self, method = 0, *args, **kwargs):
+        try:
+            return Authenticator.METHOD_TO_AUTHENTICATOR[method](*args,
+                **kwargs)
+        except KeyError:
+            raise ValueError("unknown method")
