@@ -24,8 +24,6 @@ import header
 from lib import baseserver, conf
 
 __doc__ = """a simple SOCKS5 server framework"""
-########slim down code
-###########clean!!!!
 ######test everything
 ########integrate CLI
 ############integrate handler-created servers with baseserver?
@@ -348,24 +346,19 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             self.address_string)
         
         try:
-            wrapped_conn = authentication.wrap_socket(self.event.conn,
-                self.event.server.auth_methods, True,
-                *self.event.server.auth_args, **self.event.server.auth_kwargs)
-            self.event.conn = wrapped_conn
+            self.event.conn = authentication.wrap_socket(self.event.conn, True,
+                *self.event.server.authenticators)
             request_header.fload(self.event.conn.makefile())
             self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
                 request_header.cmd](RequestEvent(request_header,
                     self.event.conn, self.event.remote, self.event.server))
-        except (authentication.AuthenticationError,
-                authentication.MethodNegotiationError):
-            pass
-        except KeyError: # command not supported
-            try:
-                self.event.conn.sendall(str(header.TCPReplyHeader(rep = 7)))
-            except socket.error:
-                pass
-            self.request_handler = None
-        except Exception:
+        except Exception as e:
+            if isinstance(e, KeyError): # method not supported
+                try:
+                    self.event.conn.sendall(str(header.TCPReplyHeader(
+                        rep = 7)))
+                except socket.error:
+                    pass
             self.event.server.sfprint(sys.stderr,
                 "ERROR while handling connection with %s:\n"
                     % self.address_string, traceback.format_exc())
@@ -387,18 +380,16 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         baseserver.eventhandler.ConnectionHandler.next(self)
 
 class SOCKS5Server(baseserver.baseserver.BaseServer):
-    """accepts optional auth* information"""
+    """accepts optional authentication information"""
     
     def __init__(self, address = baseserver.baseserver.best_address(1080),
-            auth_args = (), auth_methods = (0, ), auth_kwargs = {},
+            authenticators = (),
             event_handler_class = SOCKS5ConnectionHandler, name = "SOCKS5",
             udp_buflen = baseserver.baseserver.BaseServer.DEFAULTS[
                 socket.SOCK_DGRAM]["buflen"], **kwargs):
         baseserver.baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
             address = address, event_handler_class = event_handler_class,
             name = name, **kwargs)
-        self.auth_args = auth_args
-        self.auth_methods = auth_methods
-        self.auth_kwargs = auth_kwargs
+        self.authenticators = authenticators
         self.tcp_buflen = self.buflen
         self.udp_buflen = udp_buflen

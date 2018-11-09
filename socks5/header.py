@@ -17,7 +17,7 @@ import errno
 import socket
 
 import error
-import pack
+from lib import pack
 
 __doc__ = "header formats for the SOCKS version 5 protocol"
 
