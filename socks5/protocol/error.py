@@ -17,3 +17,13 @@ __doc__ = "SOCKS5 error"
 
 class SOCKS5Error(RuntimeError):
     pass
+
+class ResponseError(SOCKS5Error):
+    REP_TO_MSG = {1: "general SOCKS server failure",
+        2: "connection not allowed by ruleset", 3: "Network unreachable",
+        4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",
+        7: "Command not supported", 8: "Address type not supported"}
+
+    def __init__(self, c, *args, **kwargs):
+        SOCKS5Error.__init__(self, ResponseError.REP_TO_MSG[c], *args,
+            **kwargs)

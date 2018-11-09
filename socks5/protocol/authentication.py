@@ -25,14 +25,25 @@ this also handles the authentication method subnegotiation
 """
 ####################################username/password implementation
 ########migrate from individual authenticators to multi-method abstractions
-def Authenticator(method = 0, *args, **kwargs):
-    """factory function for a specific authentication method"""
-    try:
-        return {0: DummyAuthenticator, 1: GSSAPIAuthenticator,
-            2: UsernamePasswordAuthenticator,
-            255: FailingAuthenticator}[method](*args, **kwargs)
-    except KeyError:
-        raise ValueError("unknown method")
+"""
+desirable API:
+
+class Authenticator:
+    def __init__(self):
+        pass
+    def __call__(self, conn):
+        pass
+"""
+class Authenticator(object):
+    """authentication method factory"""
+    
+    def __new__(self, method = 0, *args, **kwargs):
+        try:
+            return {0: DummyAuthenticator, 1: GSSAPIAuthenticator,
+                2: UsernamePasswordAuthenticator,
+                255: FailingAuthenticator}[method](*args, **kwargs)
+        except KeyError:
+            raise ValueError("unknown method")
 
 def wrap_socket(sock, methods = (0, ), server_side = False, *auth_args,
         **auth_kwargs):
@@ -40,8 +51,8 @@ def wrap_socket(sock, methods = (0, ), server_side = False, *auth_args,
     attempt to wrap a socket using the most
     desirable authentication method
     """
-    return Authenticator(MethodNegotiator(sock, methods, server_side)(), sock,
-        server_side, *auth_args, **auth_kwargs)()
+    return Authenticator(MethodNegotiator(methods, server_side)(sock),
+        server_side, *auth_args, **auth_kwargs)(sock)
 
 class AuthenticationError(error.SOCKS5Error):
     pass
@@ -52,13 +63,12 @@ class AuthenticationFailed(AuthenticationError):
 class BaseAuthenticator:
     """base class for connection authentication"""
     
-    def __init__(self, conn, server_side = False, *args, **kwargs):
-        self.conn = conn
+    def __init__(self, server_side = False, *args, **kwargs):
         self.server_side = server_side
 
-    def __call__(self):
+    def __call__(self, conn):
         """MUST return a (wrapped) connection or None"""
-        return self.conn
+        return conn
 
 class DummyAuthenticator(BaseAuthenticator):
     pass
@@ -82,24 +92,25 @@ class MethodNegotiationFailed(MethodNegotiationError):
     pass
 
 class MethodNegotiator:
-    def __init__(self, conn, methods = (0, ), server_side = False):
-        self.conn = conn
+    """negotiates authentication method"""
+    
+    def __init__(self, methods = (0, ), server_side = False):
         self.methods = methods
         self.server_side = server_side
     
-    def __call__(self):
+    def __call__(self, conn):
         """return the agreed upon method or complain"""
         if self.server_side:
-            return self.negotiate_server_side()
-        return self.negotiate_client_side()
+            return self.negotiate_server_side(conn)
+        return self.negotiate_client_side(conn)
 
-    def negotiate_client_side(self):
+    def negotiate_client_side(self, conn):
         response_header = header.MethodResponseHeader()
         
         try:
-            self.conn.sendall(str(header.MethodQueryHeader(self.methods,
+            conn.sendall(str(header.MethodQueryHeader(self.methods,
                 len(self.methods))))
-            response_header.fload(self.conn.makefile())
+            response_header.fload(conn.makefile())
         except socket.error:
             raise MethodNegotiationError()
 
@@ -107,13 +118,13 @@ class MethodNegotiator:
             raise MethodNegotiationFailed()
         return response_header.method
     
-    def negotiate_server_side(self):
+    def negotiate_server_side(self, conn):
         accepted_methods = {m: None for m in self.methods} # quick access
         query_header = header.MethodQueryHeader()
         selected_method = 255
         
         try:
-            query_header.fload(self.conn.makefile())
+            query_header.fload(conn.makefile())
         except socket.error:
             raise MethodNegotiationError()
         
@@ -123,7 +134,7 @@ class MethodNegotiator:
                 break
 
         try:
-            self.conn.sendall(str(header.MethodResponseHeader(
+            conn.sendall(str(header.MethodResponseHeader(
                 selected_method)))
         except socket.error:
             raise MethodNegotiationError()
@@ -133,4 +144,4 @@ class MethodNegotiator:
         return selected_method
 
 class UsernamePasswordAuthenticator(BaseAuthenticator):
-    pass
+    pass########################################

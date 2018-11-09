@@ -21,12 +21,6 @@ import pack
 
 __doc__ = "header formats for the SOCKS version 5 protocol"
 
-def response_error_factory(rep):
-    """return a ResponseError based on REP"""
-    if rep in ResponseError.REP_TO_MSG:
-        return ResponseError(ResponseError.REP_TO_MSG[c])
-    return
-
 class BaseSOCKS5Header:
     """
     address manipulation faculties for headers
@@ -209,8 +203,7 @@ class MethodQueryHeader:
         self.methods = tuple(self.methods)
 
     def __str__(self):
-        return "".join([pack.pack(self.version, 1),
-            pack.pack(self.nmethods, 1)] \
+        return "".join([pack.pack(self.ver, 1), pack.pack(self.nmethods, 1)]
             + [pack.pack(m, 1) for m in self.methods])
 
 class MethodResponseHeader:
@@ -235,12 +228,6 @@ class MethodResponseHeader:
 
     def __str__(self):
         return "".join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))
-
-class ResponseError(error.SOCKS5Error):
-    REP_TO_MSG = {1: "general SOCKS server failure",
-        2: "connection not allowed by ruleset", 3: "Network unreachable",
-        4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",
-        7: "Command not supported", 8: "Address type not supported"}
 
 class TCPReplyHeader(BaseSOCKS5TCPHeader):
     """

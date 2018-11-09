@@ -22,7 +22,7 @@ from client import create_connection, wrap_socket
 __doc__ = """
 SOCKS5
 
-when executed, runs a configurable SOCKS server (version 5 by default)
+when executed, runs a configurable SOCKS soerver (version 5 by default)
 """
 
 if __name__ == "__main__":

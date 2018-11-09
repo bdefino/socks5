@@ -355,7 +355,6 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                 *self.event.server.auth_args, **self.event.server.auth_kwargs)
             self.event.conn = wrapped_conn
             request_header.fload(self.event.conn.makefile())
-            
             self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
                 request_header.cmd](RequestEvent(request_header,
                     self.event.conn, self.event.remote, self.event.server))
@@ -364,7 +363,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
             pass
         except KeyError: # command not supported
             try:
-                self.event.conn.sendall(str(header.ReplyHeader(rep = 7)))
+                self.event.conn.sendall(str(header.TCPReplyHeader(rep = 7)))
             except socket.error:
                 pass
             self.request_handler = None

@@ -15,15 +15,39 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import socket
 
-from protocol import authentication
+from protocol import authentication, error, header
 
 __doc__ = "SOCKS5 client"
 
-global wrap_socket
-wrap_socket = authentication.wrap_socket
+def create_connection(server_address, target_address, timeout = None,
+        source_address = None, *args, **kwargs):
+    """socket.create_connection analog (with IPv6 support)"""
+    af = socket.AF_INET
 
-def create_connection(address, timeout = None, source_address = None, *args,
-        **kwargs):
-    """socket.create_connection analog"""
-    return wrap_socket(socket.create_connection(address,
-        timeout, source_address), *args, **kwargs)
+    if len(server_address) == 4:
+        af = socket.AF_INET6
+    elif not len(server_address) == 2:
+        raise ValueError("unknown address family")
+    sock = socket.socket(af, socket.SOCK_STREAM)
+
+    if source_address:
+        sock.bind(source_address)
+    sock.settimeout(timeout)
+    sock.connect(server_address)
+    return wrap_socket(sock, target_address, 1, *args, **kwargs)
+
+def wrap_socket(sock, target_address, cmd = 1, *args, **kwargs):
+    """wrap a socket with SOCKS5"""
+    reply_header = header.TCPReplyHeader()
+    sock = authentication.wrap_socket(sock, *args, **kwargs)
+    
+    try:
+        sock.sendall(str(header.TCPRequestHeader(3, cmd, target_address[0],
+            target_address[1])))
+        reply_header.fload(sock.makefile())
+    except socket.error as e:
+        raise error.SOCKS5Error(e)
+    
+    if reply_header.rep:
+        raise error.ResponseError(reply_header.rep)
+    return sock
