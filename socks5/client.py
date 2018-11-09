@@ -13,7 +13,17 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__doc__ = "SOCKS4 error"
+import socket
 
-class SOCKS4Error(RuntimeError):
-    pass
+from protocol import authentication
+
+__doc__ = "SOCKS5 client"
+
+global wrap_socket
+wrap_socket = authentication.wrap_socket
+
+def create_connection(address, timeout = None, source_address = None, *args,
+        **kwargs):
+    """socket.create_connection analog"""
+    return wrap_socket(socket.create_connection(address,
+        timeout, source_address), *args, **kwargs)

@@ -16,10 +16,10 @@
 import errno
 import socket
 
+import error
 import pack
-import v5error
 
-__doc__ = "header formats"
+__doc__ = "header formats for the SOCKS version 5 protocol"
 
 def response_error_factory(rep):
     """return a ResponseError based on REP"""
@@ -27,7 +27,7 @@ def response_error_factory(rep):
         return ResponseError(ResponseError.REP_TO_MSG[c])
     return
 
-class BaseHeader:
+class BaseSOCKS5Header:
     """
     address manipulation faculties for headers
 
@@ -73,7 +73,7 @@ class BaseHeader:
             if len(self._addr) == 8:
                 self.atyp = 4
 
-class BaseTCPHeader(BaseHeader):
+class BaseSOCKS5TCPHeader(BaseSOCKS5Header):
     """
     the contents of addr, port, and special vary between a reply and request;
     their internal values (_addr, _port, and _special) should be managed by
@@ -86,7 +86,7 @@ class BaseTCPHeader(BaseHeader):
     
     def __init__(self, addr = "", atyp = 3, port = 0, rsv = 0, special = 0,
             ver = 5):
-        BaseHeader.__init__(self, addr, atyp)
+        BaseSOCKS5Header.__init__(self, addr, atyp)
         self._port = port
         self.rsv = rsv
         self._special = special
@@ -120,7 +120,7 @@ class BaseTCPHeader(BaseHeader):
         header.append(pack.pack(self._port, 2))
         return "".join(header)
 
-class BaseUDPHeader(BaseHeader):
+class BaseSOCKS5UDPHeader(BaseSOCKS5Header):
     """
       +----+------+------+----------+----------+----------+
       |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
@@ -142,7 +142,7 @@ class BaseUDPHeader(BaseHeader):
     """
     
     def __init__(self, addr = "", atyp = 3, frag = 0, port = 0, rsv = 0):
-        BaseHeader.__init__(self, addr, atyp)
+        BaseSOCKS5Header.__init__(self, addr, atyp)
         self.frag = frag
         self._port = port
         self.rsv = rsv
@@ -173,13 +173,76 @@ class BaseUDPHeader(BaseHeader):
         header.append(pack.pack(self._port, 2))
         return "".join(header)
 
-class ResponseError(v5error.SOCKS5Error):
+class MethodQueryHeader:
+    """
+                   +----+----------+----------+
+                   |VER | NMETHODS | METHODS  |
+                   +----+----------+----------+
+                   | 1  |    1     | 1 to 255 |
+                   +----+----------+----------+
+
+    The values currently defined for METHOD are:
+
+      o  X'00' NO AUTHENTICATION REQUIRED
+      o  X'01' GSSAPI
+      o  X'02' USERNAME/PASSWORD
+      o  X'03' to X'7F' IANA ASSIGNED
+      o  X'80' to X'FE' RESERVED FOR PRIVATE METHODS
+      o  X'FF' NO ACCEPTABLE METHODS
+    """
+    
+    def __init__(self, methods = (), nmethods = 0, ver = 5):
+        self.methods = methods
+        self.nmethods = nmethods
+        self.ver = ver
+
+    def fload(self, fp):
+        """load from a file-like object"""
+        n = 0
+        self.ver = pack.unpack(fp.read(1))
+        self.nmethods = pack.unpack(fp.read(1))
+        self.methods = []
+
+        while n < self.nmethods: # more efficient
+            self.methods.append(pack.unpack(fp.read(1)))
+            n += 1
+        self.methods = tuple(self.methods)
+
+    def __str__(self):
+        return "".join([pack.pack(self.version, 1),
+            pack.pack(self.nmethods, 1)] \
+            + [pack.pack(m, 1) for m in self.methods])
+
+class MethodResponseHeader:
+    """
+                         +----+--------+
+                         |VER | METHOD |
+                         +----+--------+
+                         | 1  |   1    |
+                         +----+--------+
+
+    See MethodQueryHeader for METHOD values
+    """
+
+    def __init__(self, method = 0, ver = 5):
+        self.method = method
+        self.ver = ver
+
+    def fload(self, fp):
+        """load from a file-like object"""
+        self.ver = pack.unpack(fp.read(1))
+        self.method = pack.unpack(fp.read(1))
+
+    def __str__(self):
+        return "".join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))
+
+class ResponseError(error.SOCKS5Error):
     REP_TO_MSG = {1: "general SOCKS server failure",
         2: "connection not allowed by ruleset", 3: "Network unreachable",
         4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",
         7: "Command not supported", 8: "Address type not supported"}
 
-class TCPReplyHeader(BaseTCPHeader):
+class TCPReplyHeader(BaseSOCKS5TCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -214,7 +277,7 @@ class TCPReplyHeader(BaseTCPHeader):
     
     def __init__(self, atyp = 3, bnd_addr = "", bnd_port = 0, rep = 0, rsv = 0,
             ver = 5):
-        BaseTCPHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
+        BaseSOCKS5TCPHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -243,7 +306,7 @@ class TCPReplyHeader(BaseTCPHeader):
     
     def fload(self, fp):
         """load from a file-like object"""
-        BaseTCPHeader.fload(self, fp)
+        BaseSOCKS5TCPHeader.fload(self, fp)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -251,21 +314,21 @@ class TCPReplyHeader(BaseTCPHeader):
     def __str__(self):
         self._special = self.rep
         self.update_addrinfo()
-        return BaseTCPHeader.__str__(self)
+        return BaseSOCKS5TCPHeader.__str__(self)
 
     def unpack_addr(self):
         """return the IP address or domain name in BND.ADDR"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        return BaseTCPHeader.unpack_addr(self)
+        return BaseSOCKS5TCPHeader.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        BaseTCPHeader.update_addrinfo(self)
+        BaseSOCKS5TCPHeader.update_addrinfo(self)
 
-class TCPRequestHeader(BaseTCPHeader):
+class TCPRequestHeader(BaseSOCKS5TCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -292,14 +355,14 @@ class TCPRequestHeader(BaseTCPHeader):
     
     def __init__(self, atyp = 3, cmd = 1, dst_addr = "", dst_port = 0, rsv = 0,
             ver = 5):
-        BaseTCPHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
+        BaseSOCKS5TCPHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
 
     def fload(self, fp):
         """load from a file-like object"""
-        BaseTCPHeader.fload(self, fp)
+        BaseSOCKS5TCPHeader.fload(self, fp)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
@@ -307,22 +370,72 @@ class TCPRequestHeader(BaseTCPHeader):
     def __str__(self):
         self._special = self.cmd
         self.update_addrinfo()
-        return BaseTCPHeader.__str__(self)
+        return BaseSOCKS5TCPHeader.__str__(self)
 
     def unpack_dst_addr(self):
         """return the IP address of domain name in DST.ADDR"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        return BaseTCPHeader.unpack_addr(self)
+        return BaseSOCKS5TCPHeader.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        BaseTCPHeader.update_addrinfo(self)
+        BaseSOCKS5TCPHeader.update_addrinfo(self)
 
-class UDPHeader(BaseUDPHeader):
-    """alias for BaseUDPHeader"""
+class UDPHeader(BaseSOCKS5UDPHeader):
+    """alias for BaseSOCKS5UDPHeader"""
     
     def __init__(self, *args, **kwargs):
-        BaseUDPHeader.__init__(self, *args, **kwargs)
+        BaseSOCKS5UDPHeader.__init__(self, *args, **kwargs)
+
+class UsernamePasswordRequest:
+    """
+           +----+------+----------+------+----------+
+           |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+           +----+------+----------+------+----------+
+           | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+           +----+------+----------+------+----------+
+    """
+
+    def __init__(self, passwd = "", plen = 0, ulen = 0, uname = "", ver = 5):
+        self.passwd = passwd
+        self.plen = plen
+        self.ulen = ulen
+        self.uname = uname
+        self.ver = ver
+
+    def fload(self, fp):
+        """load from a file-like object"""
+        self.ver = pack.unpack(fp.read(1))
+        self.ulen = pack.unpack(fp.read(1))
+        self.uname = fp.read(self.ulen)
+        self.plen = pack.unpack(fp.read(1))
+        self.passwd = fp.read(self.plen)
+
+    def __str__(self):
+        return "".join((pack.pack(self.ver, 1), pack.pack(self.ulen, 1),
+            self.uname, pack.pack(self.plen, 1), self.passwd))
+
+class UsernamePasswordResponse:
+    """
+
+                        +----+--------+
+                        |VER | STATUS |
+                        +----+--------+
+                        | 1  |   1    |
+                        +----+--------+
+    """
+
+    def __init__(self, status = 0, ver = 5):
+        self.status = status
+        self.ver = ver
+
+    def fload(self, fp):
+        """load from a file-like object"""
+        self.ver = pack.unpack(fp.read(1))
+        self.status = pack.unpack(fp.read(1))
+
+    def __str__(self):
+        return pack.pack(self.ver, 1) + pack.pack(self.status, 1)

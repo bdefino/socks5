@@ -19,9 +19,8 @@ import thread
 import time
 import traceback
 
-from lib import baseserver
-from lib import conf
-import v5auth
+from protocol import authentication, header
+from lib import baseserver, conf
 
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
@@ -34,6 +33,14 @@ __doc__ = """a simple SOCKS5 server framework"""
 def open_config(path):
     """factory function for a server configuration file"""
     return conf.Conf(path, autosync = False)
+
+def serve(threaded = None, *args, **kwargs):
+    """start a simple server with the arguments"""
+    server = SOCKS5Server(*args, **kwargs)
+
+    if threaded:
+        server.thread(threaded)
+    server()
 
 class BaseRequestHandler(baseserver.eventhandler.EventHandler):
     pass
@@ -68,10 +75,10 @@ class BindRequestHandler(BaseRequestHandler):
     
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
-        self.conn_reply = protocol.header.TCPReplyHeader()
+        self.conn_reply = header.TCPReplyHeader()
         self.event.conn.settimeout(self.event.server.timeout)
         self.pipe_handler = None
-        self.server_reply = protocol.header.TCPReplyHeader()
+        self.server_reply = header.TCPReplyHeader()
         self.start = time.time()
         self.target_conn = None
         self.target_remote = None
@@ -154,7 +161,7 @@ class ConnectRequestHandler(BaseRequestHandler):
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
         self.pipe_sockets_handler = None
-        self.reply = protocol.header.TCPReplyHeader()
+        self.reply = header.TCPReplyHeader()
         self.target_conn = None
     
     def connect(self):
@@ -280,7 +287,7 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
     
     def __call__(self):
         bound = False
-        reply = protocol.header.TCPReplyHeader()
+        reply = header.TCPReplyHeader()
         server_sock = None
         target_address = (self.event.request_header.unpack_addr(),
             self.event.request_header.dst_port)
@@ -338,20 +345,23 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
             **kwargs)
         self.address_string = baseserver.straddr.straddr(self.event.remote)
-        request_header = protocol.header.TCPRequestHeader()
+        request_header = header.TCPRequestHeader()
         self.event.server.sprint("Handling connection with",
             self.address_string)
         
         try:
-            wrapped_conn = v5auth.Auth(self.event.conn, server_side = True)()
+            wrapped_conn = authentication.wrap_socket(self.event.conn,
+                self.event.server.auth_methods, True,
+                *self.event.server.auth_args, **self.event.server.auth_kwargs)
+            self.event.conn = wrapped_conn
+            request_header.fload(self.event.conn.makefile())
             
-            if wrapped_conn: # authenticated/authorized
-                self.event.conn = wrapped_conn
-                request_header.fload(self.event.conn.makefile())
-                
-                self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
-                    request_header.cmd](RequestEvent(request_header,
-                        self.event.conn, self.event.remote, self.event.server))
+            self.request_handler = SOCKS5ConnectionHandler.CMD_TO_HANDLER[
+                request_header.cmd](RequestEvent(request_header,
+                    self.event.conn, self.event.remote, self.event.server))
+        except (authentication.AuthenticationError,
+                authentication.MethodNegotiationError):
+            pass
         except KeyError: # command not supported
             try:
                 self.event.conn.sendall(str(header.ReplyHeader(rep = 7)))
@@ -380,21 +390,18 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         baseserver.eventhandler.ConnectionHandler.next(self)
 
 class SOCKS5Server(baseserver.baseserver.BaseServer):
-    def __init__(self, address = baseserver.baseserver.best_address(),
+    """accepts optional auth* information"""
+    
+    def __init__(self, address = baseserver.baseserver.best_address(1080),
+            auth_args = (), auth_methods = (0, ), auth_kwargs = {},
             event_handler_class = SOCKS5ConnectionHandler, name = "SOCKS5",
             udp_buflen = baseserver.baseserver.BaseServer.DEFAULTS[
                 socket.SOCK_DGRAM]["buflen"], **kwargs):
         baseserver.baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
             address = address, event_handler_class = event_handler_class,
             name = name, **kwargs)
+        self.auth_args = auth_args
+        self.auth_methods = auth_methods
+        self.auth_kwargs = auth_kwargs
         self.tcp_buflen = self.buflen
         self.udp_buflen = udp_buflen
-
-if __name__ == "__main__":
-    config = conf.Conf(autosync = False)
-
-    #mkconfig
-    
-    server = SOCKS5Server(address = ("::1", 1080, 0 , 0), **config)
-    server.thread(baseserver.threaded.Pipelining(nthreads = 1))
-    server()

@@ -13,22 +13,6 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = __name__
+from . import authentication, error, header, pack
 
-from lib import baseserver, conf
-import client, protocol, server
-from client import create_connection, wrap_socket
-
-__doc__ = """
-SOCKS5
-
-when executed, runs a configurable SOCKS server (version 5 by default)
-"""
-
-if __name__ == "__main__":
-    config = conf.Conf(autosync = False)
-    
-    #mkconfig
-
-    threaded = baseserver.threaded.Pipelining(nthreads = 1)
-    server.serve(threaded, **config)
+__doc__ = "SOCKS5 on-the-wire protocol"
