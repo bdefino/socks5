@@ -18,6 +18,7 @@ __package__ = __name__
 from lib import baseserver, conf
 import client, protocol, server
 from client import create_connection, wrap_socket
+from server import serve, SOCKS5Server
 
 __doc__ = """
 SOCKS5
@@ -31,4 +32,4 @@ if __name__ == "__main__":
     #mkconfig
 
     threaded = baseserver.threaded.Pipelining(nthreads = 1)
-    server.serve(threaded, **config)
+    serve(threaded, **config)

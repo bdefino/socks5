@@ -17,7 +17,7 @@ import socket
 
 from protocol import authentication, error, header
 
-__doc__ = "SOCKS5 client"
+__doc__ = "a simple SOCKS5 client"
 
 def create_connection(server_address, target_address, timeout = None,
         source_address = None, *args, **kwargs):

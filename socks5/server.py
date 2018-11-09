@@ -24,15 +24,12 @@ from lib import baseserver, conf
 
 __doc__ = """a simple SOCKS5 server framework"""
 ########slim down code
+###########clean!!!!
 ######test everything
 ########integrate CLI
 ############integrate handler-created servers with baseserver?
 ##########finish UDP implementation
 ###########improve security
-
-def open_config(path):
-    """factory function for a server configuration file"""
-    return conf.Conf(path, autosync = False)
 
 def serve(threaded = None, *args, **kwargs):
     """start a simple server with the arguments"""
