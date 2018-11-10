@@ -32,7 +32,7 @@ when executed, runs a configurable SOCKS soerver (version 5 by default)
 ################clean code
 
 if __name__ == "__main__":
-    config = conf.Conf(autosync = False)
+    config = conf.Conf()
     
     #mkconfig
     

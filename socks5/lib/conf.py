@@ -17,147 +17,257 @@ __package__ = __name__
 
 import fcntl
 import os
+import StringIO
 
-__doc__ = "configuration files"
+__doc__ = """
+simple configuration files adhering to the following configurable format:
+    TITLE START + "title" + TITLE END + '\n'
+    "key" + ASSIGNMENT OPERATOR + "value" + COMMENT + "comment" + '\n'
+the same format using the default flavor:
+    [title]
+    key:value#comment
+"""
 
 global DEFAULT_CONF_FLAVOR
 
+def guess_type(string):
+    """attempt to guess a string's type (float, int, long, str)"""
+    if not isinstance(string, str):
+        raise TypeError("string should be a string")
+    accepted = [] # ordered from most preferable to least preferable
+    
+    for t in (int, float, long, str): # order matters
+        try:
+            t(string)
+            accepted.append(t)
+        except ValueError:
+            pass
+    return accepted[0]
+
 class ConfFlavor:
     """
-    rudimentary flavor for a configuration file
+    configuration file syntax
 
-    note that when a comment evaluates to False (False, None, "", 0),
-    we assume there are no comments
+    checks for syntax conflicts
     """
+    
+    def __init__(self, assignment = ':', comment = '#', title_end = ']',
+            title_start = '['):
+        delims = filter(None, (assignment, comment, title_end, title_start))
 
-    def __init__(self, assignment = ':', comment = '#'):
-        assert not assignment == comment, "conflicting delimiters"
+        for ai, a in enumerate(delims): # unfortunately O(n**2)
+            for bi, b in enumerate(delims):
+                if not ai == bi and (a in b or b in a):
+                    raise ValueError("conflicting syntax")
         self.assignment = assignment
         self.comment = comment
+        self.title_end = title_end
+        self.title_start = title_start
 
 DEFAULT_CONF_FLAVOR = ConfFlavor()
 
-class Conf(dict):
+class Conf(list):
     """
-    a basic configuration file reader/writer with dict-like behavior
+    a dynamic configuration file represented as a list of sections
 
-    autosync specifies whether to automatically synchronize primary
-    and secondary storage of the configuration file
+    where src is a file or a string
     """
-
-    def __init__(self, path = None, expect = None,
-            flavor = DEFAULT_CONF_FLAVOR, autosync = True):
-        dict.__init__(self)
-        self.autosync = autosync
-
-        if expect:
-            expect = set(expect)
-        self._expect = expect # the dictionary keys we should expect
+    
+    def __init__(self, src = None, caste = True, flavor = DEFAULT_CONF_FLAVOR):
+        list.__init__(self)
+        self.caste = caste
         self.flavor = flavor
-        self.path = path
 
-        if self.path:
+        if isinstance(src, str):
+            src = StringIO.StringIO(src)
+        self.fp = src
+
+        if self.fp:
+            self.read()
+
+    def __eq__(self, other):
+        """unordered comparison"""
+        if not isinstance(other, Conf):
+            return False
+        a = [s for s in other]
+        b = [s for s in self]
+        
+        while a and b:
+            av = a.pop()
+
+            for i, bv in enumerate(b):
+                if av == bv:
+                    b.remove(v)
+                    break
+        return not a and not b
+    
+    def read(self):
+        """read the configuration file"""
+        while self: # clear
+            self.pop()
+        locked = True
+
+        try:
+            fcntl.flock(self.fp.fileno(), fcntl.LOCK_EX)
+        except (AttributeError, IOError):
+            locked = False
+
+        try:
+            self.fp.seek(0, os.SEEK_END)
+            size = self.fp.tell()
+            self.fp.seek(0, os.SEEK_SET)
+            
+            while self.fp.tell() < size:
+                section = Section(self.fp, self.caste, self.flavor)
+                
+                if not section.empty():
+                    self.append(section)
+        finally:
+            if locked:
+                try:
+                    fcntl.flock(self.fp.fileno(), fcntl.LOCK_UN)
+                except (AttributeError, IOError):
+                    pass
+    
+    def __str__(self):
+        return "\n".join((str(s) for s in self))
+
+    def sync(self):
+        """synchronize data with the source"""
+        self.fp.seek(0, os.SEEK_SET)
+        
+        for s in self:
+            s.fp = self.fp # in case any sections were added
+            s.sync()
+            self.fp.write('\n') # trailing newline
+
+class Section(dict):
+    """a configuration file section"""
+    
+    def __init__(self, src = None, caste = True, flavor = DEFAULT_CONF_FLAVOR,
+            title = None):
+        self.caste = caste
+        self.flavor = flavor
+
+        if isinstance(src, str):
+            src = StringIO.StringIO(src)
+        self.fp = src
+        self.title = title
+
+        if self.fp:
             self.read()
 
     def add(self, key, value):
         """
-        add a key, value pair to the configuration file
+        add a key/value pair to the configuration file
 
         the key may already exist
         """
         if self.has_key(key):
             if not isinstance(self[key], list):
-                dict.__setitem__(self, key, [self[key]])
+                self[key] = [self[key]]
             self[key].append(value)
         else:
-            dict.__setitem__(self, key, value)
+            self[key] = value
 
-        if self.autosync:
-            self.write()
+    def empty(self):
+        """return whether there is a title or content"""
+        return not len(self) and not self.titled()
 
-    def clear(self):
-        dict.clear(self)
-        
-        if self.autosync:
-            self.write()
+    def __eq__(self, other):
+        """unordered comparison"""
+        if not isinstance(other, Section) \
+                or not set(self.keys()) == set(other.keys()):
+            return False
 
-    def __delitem__(self, key):
-        dict.__delitem__(self, key)
-
-        if self.autosync:
-            self.write()
-
-    def load(self, string):
-        """load from a string"""
-        self.clear()
-        lines = string.split('\n')
-        
-        if lines:
-            for i in range(len(lines) - 1, -1, -1): # strip comments
-                l = lines[i]
-
-                if self.flavor.comment and self.flavor.comment in l:
-                    l = l[:l.find(self.flavor.comment)]
-                l = l.strip()
-
-                if l:
-                    lines[i] = l
-                else:
-                    del lines[i]
-
-        for l in lines: # parse assignments
-            k = l
-            v = None
-
-            if self.flavor.assignment in l:
-                k, v = [e.strip() for e in l.split(self.flavor.assignment, 1)]
-            self.add(k, v) # set/append as needed
-
-        if self._expect and not self._expect == set(self.keys()):
-            raise ValueError("missing and/or additional keys")
+        for k, v in self.items():
+            if not other[k] == v:
+                return False
+        return self.title == other.title
 
     def read(self):
-        """load from path"""
-        if not self.flavor or not self.path:
-            raise ValueError("invalid flavor and/or path attribute")
-        data = ""
+        """read the section"""
+        locked = True
+        read = 0
+
+        try:
+            fcntl.flock(self.fp.fileno(), fcntl.LOCK_EX)
+        except (AttributeError, IOError):
+            locked = False
         
-        with open(self.path, "rb") as fp:
-            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
-            data = fp.read()
-            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
-        self.load(data)
+        try:
+            start = self.fp.tell()
+            self.fp.seek(0, os.SEEK_END)
+            size = self.fp.tell()
+            self.fp.seek(start, os.SEEK_SET)
+            
+            while read < size:
+                line = self.fp.readline()
+                read += len(line)
+                stripped = line.strip()
 
-    def __setitem__(self, key, value):
-        dict.__setitem__(self, key, value)
+                if self.flavor.comment:
+                    comment_index = stripped.find(self.flavor.comment)
+                    
+                    if comment_index > -1:
+                        stripped = stripped[:comment_index]
+                
+                if not stripped:
+                    continue
+                elif self.flavor.title_end and self.flavor.title_start \
+                        and stripped.startswith(self.flavor.title_start) \
+                        and stripped.endswith(self.flavor.title_end) \
+                        and len(stripped) >= len(self.flavor.title_end) \
+                            + len(self.flavor.title_start): # title
+                    if len(self) or self.titled(): # overstepped
+                        self.fp.seek(-len(line), os.SEEK_CUR) # rectify
+                        break
+                    self.title = stripped[len(self.flavor.title_start)
+                        :-len(self.flavor.title_end)]
+                else:
+                    k = stripped
+                    v = None
 
-        if self.autosync:
-            self.write()
+                    if self.flavor.assignment \
+                            and self.flavor.assignment in stripped:
+                        k, v = [e.strip()
+                            for e in stripped.split(self.flavor.assignment, 1)]
+
+                        if self.caste:
+                            v = guess_type(v)(v) # caste, if possible
+                    self[k] = v
+        finally:
+            if locked:
+                try:
+                    fcntl.flock(self.fp.fileno(), fcntl.LOCK_UN)
+                except (AttributeError, IOError):
+                    pass
 
     def __str__(self):
-        """convert to string"""
         lines = []
 
-        for k, vs in self.items():
-            k = str(k)
+        if self.titled():
+            lines.append("".join((self.flavor.title_start, str(self.title),
+                self.flavor.title_end)))
 
-            if vs == None:
+        for k, v in sorted(self.items(), key = lambda e: e[0]):
+            if v == None: # omit assignment
                 lines.append(k)
-                continue
-            elif not isinstance(vs, list):
-                vs = [vs]
-            
-            for v in vs:
-                lines.append(k + self.flavor.assignment + ' ' + str(v))
-        return '\n'.join(sorted(lines))
+            elif not isinstance(v, list):
+                v = [v]
 
-    def write(self, outpath = None):
-        """write to path"""
-        if not outpath:
-            outpath = self.path
+            for _v in v:
+                lines.append(self.flavor.assignment.join(str(e)
+                    for e in (k, _v)))
 
-        with open(outpath, "wb") as fp:
-            fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
-            fp.write(self.__str__())
-            os.fdatasync(fp.fileno())
-            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        if len(lines) > 1:
+            lines.append("") # add a trailing newline
+        return '\n'.join(lines)
+
+    def sync(self):
+        """synchronize data with the source"""
+        self.fp.write(str(self))
+
+    def titled(self):
+        """return whether a title is present"""
+        return not self.title == None
