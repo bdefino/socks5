@@ -111,10 +111,11 @@ class MethodNegotiator:
     @staticmethod
     def negotiate_client_side(sock, methods = (0, )):
         """negotiate the method as a client"""
+        query_header = header.MethodQueryHeader(methods, len(methods))
         response_header = header.MethodResponseHeader()
         
         try:
-            sock.sendall(str(header.MethodQueryHeader(methods, len(methods))))
+            sock.sendall(str(query_header))
             response_header.fload(sock.makefile())
         except IOError as e:
             raise MethodNegotiationError(*e.args)
@@ -128,7 +129,7 @@ class MethodNegotiator:
         """negotiate the method as a server"""
         accepted_methods = {m: None for m in accepted_methods} # quick access
         query_header = header.MethodQueryHeader()
-        selected_method = 255
+        response_header = header.MethodResponseHeader(255)
         
         try:
             query_header.fload(sock.makefile())
@@ -137,17 +138,17 @@ class MethodNegotiator:
         
         for m in query_header.methods:
             if m in accepted_methods:
-                selected_method = m
+                response_header.method = m
                 break
         
         try:
-            sock.sendall(str(header.MethodResponseHeader(selected_method)))
+            sock.sendall(str(response_header))
         except socket.error as e:
             raise MethodNegotiationError(*e.args)
         
-        if selected_method == 255:
+        if response_header.method == 255:
             raise MethodNegotiationFailed()
-        return selected_method
+        return response_header.method
 
 class UsernamePasswordAuthenticator(BaseAuthenticator):
     """RFC 1929-compliant authentication"""
@@ -156,7 +157,7 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
         BaseAuthenticator.__init__(self, 2, *args, **kwargs)
         self.__call__ = self.authenticate_client_side
 
-        if self.server_side:
+        if self.server_side: # check once and only once
             self.__call__ = self.authenticate_server_side
         elif not len(username_to_password) == 1:
             raise ValueError("exactly one username/password pair required")
@@ -164,12 +165,13 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
     
     def authenticate_client_side(self, sock):
         """authenticate a socket as a client"""
+        request_header = header.UsernamePasswordRequestHeader(password,
+            len(password), len(username), username)
         response_header = header.UsernamePasswordResponseHeader()
         username, password = self.username_to_password.items()[0]
         
         try:
-            sock.sendall(str(header.UsernamePasswordRequestHeader(password,
-                len(password), len(username), username)))
+            sock.sendall(str(request_header))
             response_header.fload(sock.makefile())
         except IOError as e:
             raise AuthenticationError(*e.args)
@@ -186,7 +188,7 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
         """
         auth_info = None
         request_header = header.UsernamePasswordRequestHeader()
-        status = 255
+        response_header = header.UsernamePasswordResponseHeader(255)
         
         try:
             request_header.fload(sock.makefile())
@@ -195,13 +197,13 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
         expected_password = self.username_to_password.get(request_header.uname)
 
         if expected_password and request_header.passwd == expected_password:
-            status = 0
+            response_header.status = 0
 
         try:
-            sock.sendall(str(header.UsernamePasswordResponseHeader(status)))
+            sock.sendall(str(response_header))
         except socket.error as e:
             raise AuthenticationError(*e.args)
 
-        if status:
+        if response_header.status:
             raise AuthenticationFailed()
         return sock, request_header.uname

@@ -13,7 +13,7 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__doc__ = "SOCKS5 error"
+__doc__ = "general SOCKS5 errors"
 
 class SOCKS5Error(RuntimeError):
     pass
@@ -24,6 +24,6 @@ class ResponseError(SOCKS5Error):
         4: "Host unreachable", 5: "Connection refused", 6: "TTL expired",
         7: "Command not supported", 8: "Address type not supported"}
 
-    def __init__(self, c, *args, **kwargs):
-        SOCKS5Error.__init__(self, ResponseError.REP_TO_MSG[c], *args,
+    def __init__(self, rep, *args, **kwargs):
+        SOCKS5Error.__init__(self, ResponseError.REP_TO_MSG[rep], *args,
             **kwargs)

@@ -27,9 +27,8 @@ from server import serve, SOCKS5Server
 __doc__ = """
 a pure-python SOCKS5 library
 
-when executed, runs a configurable SOCKS soerver (version 5 by default)
+when executed, runs a configurable SOCKS server (version 5 by default)
 """
-################clean code
 
 if __name__ == "__main__":
     config = conf.Conf()

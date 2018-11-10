@@ -41,13 +41,13 @@ def create_connection(server_address, target_address, timeout = None,
 def wrap_socket(sock, target_address, cmd = 1, *args, **kwargs):
     """wrap a socket with SOCKS5"""
     reply_header = header.TCPReplyHeader()
+    request_header = header.TCPRequestHeader(3, cmd, *target_address[:2])
     sock = authentication.wrap_socket(sock, *args, **kwargs)
     
     try:
-        sock.sendall(str(header.TCPRequestHeader(3, cmd, target_address[0],
-            target_address[1])))
+        sock.sendall(str(request_header))
         reply_header.fload(sock.makefile())
-    except socket.error as e:
+    except IOError as e:
         raise error.SOCKS5Error(e)
     
     if reply_header.rep:
