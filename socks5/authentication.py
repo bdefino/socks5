@@ -165,7 +165,7 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
         request_header = header.UsernamePasswordRequestHeader(password,
             len(password), len(username), username)
         response_header = header.UsernamePasswordResponseHeader()
-        username, password = self.username_to_password.items()[0]
+        username, password = self.username_to_password.iteritems().next()
         
         try:
             sock.sendall(str(request_header))

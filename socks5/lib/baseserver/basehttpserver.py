@@ -122,7 +122,7 @@ class HTTPHeaders(dict):
         """convert to string, WITH the empty line terminator"""
         pairs = []
         
-        for k, v in sorted(self.items(), key = lambda e: e[0]):
+        for k, v in sorted(self.iteritems(), key = lambda e: e[0]):
             k = k.capitalize()
             
             if isinstance(v, list):

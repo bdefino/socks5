@@ -180,7 +180,7 @@ class Section(dict):
                 or not set(self.keys()) == set(other.keys()):
             return False
 
-        for k, v in self.items():
+        for k, v in self.iteritems():
             if not other[k] == v:
                 return False
         return self.title == other.title
@@ -250,7 +250,7 @@ class Section(dict):
             lines.append("".join((self.flavor.title_start, str(self.title),
                 self.flavor.title_end)))
 
-        for k, v in sorted(self.items(), key = lambda e: e[0]):
+        for k, v in sorted(self.iteritems(), key = lambda e: e[0]):
             if v == None: # omit assignment
                 lines.append(k)
             elif not isinstance(v, list):
