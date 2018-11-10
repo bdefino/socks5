@@ -89,9 +89,6 @@ class GSSAPIAuthenticator(BaseAuthenticator):
         BaseAuthenticator.__init__(self, 1, *args, **kwargs)
         raise NotImplementedError()##############################
 
-    def __call__(self, sock):###################################
-        raise NotImplementedError()
-
 class MethodNegotiationError(error.SOCKS5Error):
     pass
 
