@@ -48,17 +48,11 @@ class ConfFlavor:
     """
     configuration file syntax
 
-    checks for syntax conflicts
+    does NOT check for syntax conflicts (there should be NO common substrings)
     """
     
     def __init__(self, assignment = ':', comment = '#', title_end = ']',
             title_start = '['):
-        delims = filter(None, (assignment, comment, title_end, title_start))
-
-        for ai, a in enumerate(delims): # unfortunately O(n**2)
-            for bi, b in enumerate(delims):
-                if not ai == bi and (a in b or b in a):
-                    raise ValueError("conflicting syntax")
         self.assignment = assignment
         self.comment = comment
         self.title_end = title_end
