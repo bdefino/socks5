@@ -147,7 +147,7 @@ class MethodNegotiator:
             raise MethodNegotiationFailed()
         return response_header.method
 
-class UsernamePasswordAuthenticator(BaseAuthenticator):
+class UserPassAuthenticator(BaseAuthenticator):
     """RFC 1929-compliant authentication"""
     
     def __init__(self, username_to_password = {}, *args, **kwargs):
@@ -162,9 +162,9 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
     
     def authenticate_client_side(self, sock):
         """authenticate a socket as a client"""
-        request_header = header.UsernamePasswordRequestHeader(password,
+        request_header = header.UserPassRequestHeader(password,
             len(password), len(username), username)
-        response_header = header.UsernamePasswordResponseHeader()
+        response_header = header.UserPassResponseHeader()
         username, password = self.username_to_password.iteritems().next()
         
         try:
@@ -184,8 +184,8 @@ class UsernamePasswordAuthenticator(BaseAuthenticator):
         return (wrapped socket, username) or complain
         """
         auth_info = None
-        request_header = header.UsernamePasswordRequestHeader()
-        response_header = header.UsernamePasswordResponseHeader(255)
+        request_header = header.UserPassRequestHeader()
+        response_header = header.UserPassResponseHeader(255)
         
         try:
             request_header.fload(sock.makefile())

@@ -71,65 +71,65 @@ class BindRequestHandler(BaseRequestHandler):
     
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
-        self.conn_reply = header.TCPReplyHeader()
         self.event.conn.settimeout(self.event.server.timeout)
         self.pipe_handler = None
-        self.server_reply = header.TCPReplyHeader()
         self.start = time.time()
-        self.target_conn = None
-        self.target_remote = None
+        self.target_event = None
     
     def accept_first(self):
         """accept the first connection on BND.*"""
-        server_sock = None
+        conn_reply = header.ReplyHeader()
+        server = None
+        server_reply = header.ReplyHeader()
         
         try:
-            server_sock = socket.socket(self.event.server.af,
-                socket.SOCK_STREAM)
-            server_sock.bind((self.event.request_header.unpack_addr(), 0))
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-            self.server_sock.settimeout(self.event.server.conn_inactive)
-            self.server_reply.bnd_addr, self.server_reply.bnd_port \
-                = server_sock.getsockname()
-            server_sock.listen(1)
+            server = baseserver.baseserver.BaseServer(socket.SOCK_STREAM,
+                self.extract_connection_event,
+                timeout = self.event.server.timeout)
+            server.next = self.server_next
+            server_reply.bnd_addr, server_reply.bnd_port = server.address[:2]
         except socket.error as e:
-            self.server_reply.errno(e.args[0], bind = True)
-            server_sock = None
+            server_reply.errno(e.args[0], bind = True)
         finally:
             try:
-                self.event.conn.settimeout(self.event.server.timeout)
-                self.event.conn.sendall(str(self.server_reply))
-            except socket.error as e:
-                if server_sock:
-                    server_sock.close()
-                    server_sock = None
-        
-        if not server_sock:
-            raise StopIteration()
-        
-        try:
-            self.target_conn, self.target_remote = server_sock.accept()
-            self.conn_reply.bnd_addr, self.conn_reply.bnd_port \
-                = self.target_remote
-            self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
-                self.target_conn, self.event.server))
-        except socket.error as e:
-            self.conn_reply.errno(e.args[0], accept = True)
-        finally:
-            try:
-                self.event.conn.sendall(str(self.conn_reply))
-            except socket.error:
-                if self.target_conn:
-                    selt.target_conn.close()
-                    self.target_conn = None
-            server_sock.close()
+                self.event.conn.sendall(str(server_reply))
+            except socket.error: # signal error
+                server_reply.rep = 1
             
-            if not self.target_conn:
+            if server_reply.rep:
+                if server:
+                    server.shutdown(socket.SHUT_RDWR)
+                    server.close()
                 raise StopIteration()
+        
+        if not server_reply:
+            raise StopIteration()
+
+        try:
+            server(1) # accept the first connection
+            
+            if self.target_event:
+                conn_reply.bnd_addr, conn_reply.bnd_port \
+                    = self.target_event.remote
+        finally:
+            try:
+                self.event.conn.sendall(str(conn_reply))
+            except socket.error as e:
+                if server:
+                    server.shutdown(socket.SHUT_RDWR)
+                    server.close()
+        
+        if not self.target_event:
+            raise StopIteration()
+        self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
+            self.target_event.conn, self.event.server))
+
+    def extract_connection_event(self, handler):
+        """extract the event"""
+        self.target_event = handler.event
     
     def next(self):
-        if target_conn:
+        if self.target_event:
             return self.pipe()
         return self.accept_first()
     
@@ -141,6 +141,27 @@ class BindRequestHandler(BaseRequestHandler):
             if self.target_conn:
                 self.target_conn.close()
             raise StopIteration()
+
+    def server_next(self, server):
+        """
+        forcibly overrides baseserver.baseserver.BaseServer.next
+        in order to properly enforce a timeout
+        """
+        event = None
+        
+        while not event or not self.event.server.conn_inactive \
+                or time.time() - self.start < self.event.server.conn_inactive:
+            if not server.alive.get() or not server.socket_event_function_name:
+                raise StopIteration()
+            
+            try:
+                event = self.event_class(*getattr(server,
+                    server.socket_event_function_name)(), server = server)
+            except socket.error:
+                pass
+            time.sleep(server.sleep)
+        server.alive.set(False) # kills future iterations of the server
+        return event
 
 class ConnectRequestHandler(BaseRequestHandler):
     """
@@ -157,7 +178,7 @@ class ConnectRequestHandler(BaseRequestHandler):
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
         self.pipe_sockets_handler = None
-        self.reply = header.TCPReplyHeader()
+        self.reply = header.ReplyHeader()
         self.target_conn = None
     
     def connect(self):
@@ -283,7 +304,7 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
     
     def __call__(self):
         bound = False
-        reply = header.TCPReplyHeader()
+        reply = header.ReplyHeader()
         server_sock = None
         target_address = (self.event.request_header.unpack_addr(),
             self.event.request_header.dst_port)
@@ -341,7 +362,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
             **kwargs)
         self.address_string = baseserver.straddr.straddr(self.event.remote)
-        request_header = header.TCPRequestHeader()
+        request_header = header.RequestHeader()
         self.event.server.sprint("Handling connection with",
             self.address_string)
         
@@ -355,7 +376,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
         except Exception as e:
             if isinstance(e, KeyError): # method not supported
                 try:
-                    self.event.conn.sendall(str(header.TCPReplyHeader(
+                    self.event.conn.sendall(str(header.ReplyHeader(
                         rep = 7)))
                 except socket.error:
                     pass

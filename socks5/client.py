@@ -40,8 +40,8 @@ def create_connection(server_address, target_address, timeout = None,
 
 def wrap_socket(sock, target_address, cmd = 1, *args, **kwargs):
     """wrap a socket with SOCKS5"""
-    reply_header = header.TCPReplyHeader()
-    request_header = header.TCPRequestHeader(3, cmd, *target_address[:2])
+    reply_header = header.ReplyHeader()
+    request_header = header.RequestHeader(3, cmd, *target_address[:2])
     sock = authentication.wrap_socket(sock, *args, **kwargs)
     
     try:

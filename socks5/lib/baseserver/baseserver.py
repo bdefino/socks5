@@ -102,7 +102,7 @@ class BaseServer(socket.socket):
         self.stderr = stderr
         self.stdout = stdout
     
-    def __call__(self, max_events = -1):
+    def __call__(self, max_events = -1, cleanup = True):
         if self.type == socket.SOCK_STREAM:
             self.listen(self.backlog)
         address_string = straddr.straddr(self.address)
@@ -119,14 +119,24 @@ class BaseServer(socket.socket):
         except KeyboardInterrupt:
             pass
         finally:
-            self.alive.set(False)
             self.sprint("Closing", self.name,
                 "server on %s..." % address_string)
-            self.shutdown(socket.SHUT_RDWR)
-            self.close()
+            self.kill()
+
+            if cleanup:
+                self.cleanup()
+
+    def cleanup(self):
+        """free up associated resources"""
+        self.shutdown(socket.SHUT_RDWR)
+        self.close()
 
     def __iter__(self):
         return self
+
+    def kill(self):
+        """kill the server gracefully"""
+        self.alive.set(False)
 
     def next(self):
         """generate events"""

@@ -229,7 +229,7 @@ class MethodResponseHeader:
     def __str__(self):
         return "".join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))
 
-class TCPReplyHeader(BaseSOCKS5TCPHeader):
+class ReplyHeader(BaseSOCKS5TCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -289,7 +289,7 @@ class TCPReplyHeader(BaseSOCKS5TCPHeader):
             self.rep = 2
         
         if e in TCPReplyHeader.ERRNO_TO_REP:
-            self.rep = TCPReplyHeader.ERRNO_TO_REP[e]
+            self.rep = ReplyHeader.ERRNO_TO_REP[e]
     
     def fload(self, fp):
         """load from a file-like object"""
@@ -315,7 +315,7 @@ class TCPReplyHeader(BaseSOCKS5TCPHeader):
         self._port = self.bnd_port
         BaseSOCKS5TCPHeader.update_addrinfo(self)
 
-class TCPRequestHeader(BaseSOCKS5TCPHeader):
+class RequestHeader(BaseSOCKS5TCPHeader):
     """
         +----+-----+-------+------+----------+----------+
         |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -377,7 +377,7 @@ class UDPHeader(BaseSOCKS5UDPHeader):
     def __init__(self, *args, **kwargs):
         BaseSOCKS5UDPHeader.__init__(self, *args, **kwargs)
 
-class UsernamePasswordRequestHeader:
+class UserPassRequestHeader:
     """
            +----+------+----------+------+----------+
            |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
@@ -405,7 +405,7 @@ class UsernamePasswordRequestHeader:
         return "".join((pack.pack(self.ver, 1), pack.pack(self.ulen, 1),
             self.uname, pack.pack(self.plen, 1), self.passwd))
 
-class UsernamePasswordResponseHeader:
+class UserPassResponseHeader:
     """
 
                         +----+--------+
