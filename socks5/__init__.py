@@ -19,8 +19,8 @@ import authentication
 import client
 from client import create_connection, wrap_socket
 import error
-import header
 from lib import baseserver, conf
+import packet
 import server
 from server import serve, SOCKS5Server
 
@@ -36,5 +36,5 @@ if __name__ == "__main__":
     
     #mkconfig
     
-    threaded = baseserver.threaded.Pipelining(nthreads = 1)
+    threaded = baseserver.threaded.Pipelining(nthreads = 2)
     serve(threaded, **config[0])

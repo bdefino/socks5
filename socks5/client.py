@@ -17,7 +17,7 @@ import socket
 
 import authentication
 import error
-import header
+import packet
 
 __doc__ = "a simple SOCKS5 client"
 
@@ -40,16 +40,16 @@ def create_connection(server_address, target_address, timeout = None,
 
 def wrap_socket(sock, target_address, cmd = 1, *args, **kwargs):
     """wrap a socket with SOCKS5"""
-    reply_header = header.ReplyHeader()
-    request_header = header.RequestHeader(3, cmd, *target_address[:2])
+    reply = packet.Reply()
+    request = packet.Request(3, cmd, *target_address[:2])
     sock = authentication.wrap_socket(sock, *args, **kwargs)
     
     try:
-        sock.sendall(str(request_header))
-        reply_header.fload(sock.makefile())
+        sock.sendall(str(request))
+        reply.fload(sock.makefile())
     except IOError as e:
         raise error.SOCKS5Error(e)
     
-    if reply_header.rep:
-        raise error.ResponseError(reply_header.rep)
+    if reply.rep:
+        raise error.ResponseError(reply.rep)
     return sock

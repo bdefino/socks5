@@ -19,13 +19,12 @@ import socket
 import error
 from lib import pack
 
-__doc__ = "header formats for the SOCKS version 5 protocol"
+__doc__ = "packet formats for the SOCKS version 5 protocol"
 
-class BaseSOCKS5Header:
+class BaseSOCKS5Packet:
     """
-    address manipulation faculties for headers
-
-    shared between TCP and UDP
+    address manipulation faculties for SOCKS5
+    (non-subnegotiation) packets
     """
     
     def __init__(self, addr = "", atyp = 3):
@@ -67,7 +66,7 @@ class BaseSOCKS5Header:
             if len(self._addr) == 8:
                 self.atyp = 4
 
-class BaseSOCKS5TCPHeader(BaseSOCKS5Header):
+class BaseSOCKS5ControlPacket(BaseSOCKS5Packet):
     """
     the contents of addr, port, and special vary between a reply and request;
     their internal values (_addr, _port, and _special) should be managed by
@@ -80,7 +79,7 @@ class BaseSOCKS5TCPHeader(BaseSOCKS5Header):
     
     def __init__(self, addr = "", atyp = 3, port = 0, rsv = 0, special = 0,
             ver = 5):
-        BaseSOCKS5Header.__init__(self, addr, atyp)
+        BaseSOCKS5Packet.__init__(self, addr, atyp)
         self._port = port
         self.rsv = rsv
         self._special = special
@@ -102,19 +101,19 @@ class BaseSOCKS5TCPHeader(BaseSOCKS5Header):
         self._port = pack.unpack(fp.read(2))
 
     def __str__(self):
-        header = [pack.pack(self.ver, 1), pack.pack(self._special, 1),
+        packet = [pack.pack(self.ver, 1), pack.pack(self._special, 1),
             pack.pack(self.rsv, 1), pack.pack(self.atyp, 1)]
         self.update_addrinfo()
 
         if self.atyp == 3:
             for e in (pack.pack(len(self._addr), 1), self._addr):
-                header.append(e)
+                packet.append(e)
         else:
-            header.append(self._addr)
-        header.append(pack.pack(self._port, 2))
-        return "".join(header)
+            packet.append(self._addr)
+        packet.append(pack.pack(self._port, 2))
+        return "".join(packet)
 
-class BaseSOCKS5UDPHeader(BaseSOCKS5Header):
+class Datagram(BaseSOCKS5Packet):
     """
       +----+------+------+----------+----------+----------+
       |RSV | FRAG | ATYP | DST.ADDR | DST.PORT |   DATA   |
@@ -132,11 +131,13 @@ class BaseSOCKS5UDPHeader(BaseSOCKS5Header):
              o  IP V6 address: X'04'
           o  DST.ADDR       desired destination address
           o  DST.PORT       desired destination port
-          o  DATA     user data # NOT PART OF THE HEADER
+          o  DATA     user data
     """
     
-    def __init__(self, addr = "", atyp = 3, frag = 0, port = 0, rsv = 0):
-        BaseSOCKS5Header.__init__(self, addr, atyp)
+    def __init__(self, addr = "", atyp = 3, data = "", frag = 0, port = 0,
+            rsv = 0):
+        BaseSOCKS5Packet.__init__(self, addr, atyp)
+        self.data = data
         self.frag = frag
         self._port = port
         self.rsv = rsv
@@ -154,20 +155,21 @@ class BaseSOCKS5UDPHeader(BaseSOCKS5Header):
         elif self.atyp == 4:
             self._addr = fp.read(16)
         self._port = fp.read(2)
+        self.data = fp.read(65530 - len(self._addr)) # stay within UDP limits
 
     def __str__(self):
-        header = [pack.pack(self.rsv, 2), pack.pack(self.frag, 1),
+        packet = [pack.pack(self.rsv, 2), pack.pack(self.frag, 1),
             pack.pack(self.atyp, 1)]
 
         if self.atyp == 3:
             for e in (pack.pack(len(self._addr), 1), self._addr):
-                header.append(e)
+                packet.append(e)
         else:
-            header.append(self._addr)
-        header.append(pack.pack(self._port, 2))
-        return "".join(header)
+            packet.append(self._addr)
+        packet.append(pack.pack(self._port, 2))
+        return "".join(packet)
 
-class MethodQueryHeader:
+class MethodQuery:
     """
                    +----+----------+----------+
                    |VER | NMETHODS | METHODS  |
@@ -206,15 +208,13 @@ class MethodQueryHeader:
         return "".join([pack.pack(self.ver, 1), pack.pack(self.nmethods, 1)]
             + [pack.pack(m, 1) for m in self.methods])
 
-class MethodResponseHeader:
+class MethodResponse:
     """
                          +----+--------+
                          |VER | METHOD |
                          +----+--------+
                          | 1  |   1    |
                          +----+--------+
-
-    See MethodQueryHeader for METHOD values
     """
 
     def __init__(self, method = 0, ver = 5):
@@ -229,7 +229,7 @@ class MethodResponseHeader:
     def __str__(self):
         return "".join((pack.pack(self.ver, 1), pack.pack(self.method, 1)))
 
-class ReplyHeader(BaseSOCKS5TCPHeader):
+class Reply(BaseSOCKS5ControlPacket):
     """
         +----+-----+-------+------+----------+----------+
         |VER | REP |  RSV  | ATYP | BND.ADDR | BND.PORT |
@@ -264,7 +264,8 @@ class ReplyHeader(BaseSOCKS5TCPHeader):
     
     def __init__(self, atyp = 3, bnd_addr = "", bnd_port = 0, rep = 0, rsv = 0,
             ver = 5):
-        BaseSOCKS5TCPHeader.__init__(self, bnd_addr, atyp, bnd_port, rsv, rep, ver)
+        BaseSOCKS5ControlPacket.__init__(self, bnd_addr, atyp, bnd_port, rsv,
+            rep, ver)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -288,12 +289,12 @@ class ReplyHeader(BaseSOCKS5TCPHeader):
         if connect:
             self.rep = 2
         
-        if e in TCPReplyHeader.ERRNO_TO_REP:
-            self.rep = ReplyHeader.ERRNO_TO_REP[e]
+        if e in Reply.ERRNO_TO_REP:
+            self.rep = Reply.ERRNO_TO_REP[e]
     
     def fload(self, fp):
         """load from a file-like object"""
-        BaseSOCKS5TCPHeader.fload(self, fp)
+        BaseSOCKS5ControlPacket.fload(self, fp)
         self.bnd_addr = self._addr
         self.bnd_port = self._port
         self.rep = self._special
@@ -301,21 +302,21 @@ class ReplyHeader(BaseSOCKS5TCPHeader):
     def __str__(self):
         self._special = self.rep
         self.update_addrinfo()
-        return BaseSOCKS5TCPHeader.__str__(self)
+        return BaseSOCKS5ControlPacket.__str__(self)
 
     def unpack_addr(self):
         """return the IP address or domain name in BND.ADDR"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        return BaseSOCKS5TCPHeader.unpack_addr(self)
+        return BaseSOCKS5ControlPacket.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.bnd_addr
         self._port = self.bnd_port
-        BaseSOCKS5TCPHeader.update_addrinfo(self)
+        BaseSOCKS5ControlPacket.update_addrinfo(self)
 
-class RequestHeader(BaseSOCKS5TCPHeader):
+class Request(BaseSOCKS5ControlPacket):
     """
         +----+-----+-------+------+----------+----------+
         |VER | CMD |  RSV  | ATYP | DST.ADDR | DST.PORT |
@@ -342,14 +343,15 @@ class RequestHeader(BaseSOCKS5TCPHeader):
     
     def __init__(self, atyp = 3, cmd = 1, dst_addr = "", dst_port = 0, rsv = 0,
             ver = 5):
-        BaseSOCKS5TCPHeader.__init__(self, dst_addr, atyp, dst_port, rsv, cmd, ver)
+        BaseSOCKS5ControlPacket.__init__(self, dst_addr, atyp, dst_port, rsv,
+            cmd, ver)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
 
     def fload(self, fp):
         """load from a file-like object"""
-        BaseSOCKS5TCPHeader.fload(self, fp)
+        BaseSOCKS5ControlPacket.fload(self, fp)
         self.cmd = self._special
         self.dst_addr = self._addr
         self.dst_port = self._port
@@ -357,27 +359,21 @@ class RequestHeader(BaseSOCKS5TCPHeader):
     def __str__(self):
         self._special = self.cmd
         self.update_addrinfo()
-        return BaseSOCKS5TCPHeader.__str__(self)
+        return BaseSOCKS5ControlPacket.__str__(self)
 
     def unpack_dst_addr(self):
         """return the IP address of domain name in DST.ADDR"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        return BaseSOCKS5TCPHeader.unpack_addr(self)
+        return BaseSOCKS5ControlPacket.unpack_addr(self)
 
     def update_addrinfo(self):
         """overwrite the underlying address info and detect ATYP"""
         self._addr = self.dst_addr
         self._port = self.dst_port
-        BaseSOCKS5TCPHeader.update_addrinfo(self)
+        BaseSOCKS5ControlPacket.update_addrinfo(self)
 
-class UDPHeader(BaseSOCKS5UDPHeader):
-    """alias for BaseSOCKS5UDPHeader"""
-    
-    def __init__(self, *args, **kwargs):
-        BaseSOCKS5UDPHeader.__init__(self, *args, **kwargs)
-
-class UserPassRequestHeader:
+class UsernamePasswordRequest:
     """
            +----+------+----------+------+----------+
            |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
@@ -405,7 +401,7 @@ class UserPassRequestHeader:
         return "".join((pack.pack(self.ver, 1), pack.pack(self.ulen, 1),
             self.uname, pack.pack(self.plen, 1), self.passwd))
 
-class UserPassResponseHeader:
+class UsernamePasswordResponse:
     """
 
                         +----+--------+

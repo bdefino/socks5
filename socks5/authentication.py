@@ -16,7 +16,7 @@
 import socket
 
 import error
-import header
+import packet
 
 __doc__ = """
 connection authentication
@@ -108,46 +108,46 @@ class MethodNegotiator:
     @staticmethod
     def negotiate_client_side(sock, methods = (0, )):
         """negotiate the method as a client"""
-        query_header = header.MethodQueryHeader(methods, len(methods))
-        response_header = header.MethodResponseHeader()
+        query = packet.MethodQuery(methods, len(methods))
+        response = packet.MethodResponse()
         
         try:
-            sock.sendall(str(query_header))
-            response_header.fload(sock.makefile())
+            sock.sendall(str(query))
+            response.fload(sock.makefile())
         except IOError as e:
             raise MethodNegotiationError(*e.args)
 
-        if response_header.method == 255:
+        if response.method == 255:
             raise MethodNegotiationFailed()
-        return response_header.method
+        return response.method
 
     @staticmethod
     def negotiate_server_side(sock, accepted_methods = (0, )):
         """negotiate the method as a server"""
         accepted_methods = {m: None for m in accepted_methods} # quick access
-        query_header = header.MethodQueryHeader()
-        response_header = header.MethodResponseHeader(255)
+        query = packet.MethodQuery()
+        response = packet.MethodResponse(255)
         
         try:
-            query_header.fload(sock.makefile())
+            query.fload(sock.makefile())
         except IOError as e:
             raise MethodNegotiationError(*e.args)
         
-        for m in query_header.methods:
+        for m in query.methods:
             if m in accepted_methods:
-                response_header.method = m
+                response.method = m
                 break
         
         try:
-            sock.sendall(str(response_header))
+            sock.sendall(str(response))
         except socket.error as e:
             raise MethodNegotiationError(*e.args)
         
-        if response_header.method == 255:
+        if response.method == 255:
             raise MethodNegotiationFailed()
-        return response_header.method
+        return response.method
 
-class UserPassAuthenticator(BaseAuthenticator):
+class UsernamePasswordAuthenticator(BaseAuthenticator):
     """RFC 1929-compliant authentication"""
     
     def __init__(self, username_to_password = {}, *args, **kwargs):
@@ -162,18 +162,18 @@ class UserPassAuthenticator(BaseAuthenticator):
     
     def authenticate_client_side(self, sock):
         """authenticate a socket as a client"""
-        request_header = header.UserPassRequestHeader(password,
-            len(password), len(username), username)
-        response_header = header.UserPassResponseHeader()
+        response = packet.UsernamePasswordResponse()
         username, password = self.username_to_password.iteritems().next()
+        request = packet.UsernamePasswordRequest(password,
+            len(password), len(username), username)
         
         try:
-            sock.sendall(str(request_header))
-            response_header.fload(sock.makefile())
+            sock.sendall(str(request))
+            response.fload(sock.makefile())
         except IOError as e:
             raise AuthenticationError(*e.args)
 
-        if response_header.status:
+        if response.status:
             raise AuthenticationFailed()
         return sock, None
 
@@ -184,23 +184,23 @@ class UserPassAuthenticator(BaseAuthenticator):
         return (wrapped socket, username) or complain
         """
         auth_info = None
-        request_header = header.UserPassRequestHeader()
-        response_header = header.UserPassResponseHeader(255)
+        request = packet.UsernamePasswordRequest()
+        response = packet.UsernamePasswordResponse(255)
         
         try:
-            request_header.fload(sock.makefile())
+            request.fload(sock.makefile())
         except IOError as e:
             raise AuthenticationError(*e.args)
-        expected_password = self.username_to_password.get(request_header.uname)
+        expected_password = self.username_to_password.get(request.uname)
 
-        if expected_password and request_header.passwd == expected_password:
-            response_header.status = 0
+        if expected_password and request.passwd == expected_password:
+            response.status = 0
 
         try:
-            sock.sendall(str(response_header))
+            sock.sendall(str(response))
         except socket.error as e:
             raise AuthenticationError(*e.args)
 
-        if response_header.status:
+        if response.status:
             raise AuthenticationFailed()
-        return sock, request_header.uname
+        return sock, request.uname
