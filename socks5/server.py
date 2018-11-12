@@ -84,9 +84,9 @@ class BindRequestHandler(BaseRequestHandler):
         
         try:
             server = baseserver.baseserver.BaseServer(socket.SOCK_STREAM,
-                self.extract_connection_event,
+                lambda h: setattr(self, "target_event", h.event),
                 timeout = self.event.server.timeout)
-            server.next = self.server_next
+            server.next = self.timing_out_server_next
             server_reply.bnd_addr, server_reply.bnd_port = server.address[:2]
         except socket.error as e:
             server_reply.errno(e.args[0], bind = True)
@@ -98,8 +98,7 @@ class BindRequestHandler(BaseRequestHandler):
             
             if server_reply.rep:
                 if server:
-                    server.shutdown(socket.SHUT_RDWR)
-                    server.close()
+                    server.cleanup()
                 raise StopIteration()
         
         if not server_reply:
@@ -115,18 +114,12 @@ class BindRequestHandler(BaseRequestHandler):
             try:
                 self.event.conn.sendall(str(conn_reply))
             except socket.error as e:
-                if server:
-                    server.shutdown(socket.SHUT_RDWR)
-                    server.close()
+                pass
         
         if not self.target_event:
             raise StopIteration()
         self.pipe_handler = PipeHandler(PipeEvent(self.event.conn,
             self.target_event.conn, self.event.server))
-
-    def extract_connection_event(self, handler):
-        """extract the event"""
-        self.target_event = handler.event
     
     def next(self):
         if self.target_event:
@@ -142,15 +135,16 @@ class BindRequestHandler(BaseRequestHandler):
                 self.target_conn.close()
             raise StopIteration()
 
-    def server_next(self, server):
+    def timing_out_server_next(self, server):
         """
         forcibly overrides baseserver.baseserver.BaseServer.next
         in order to properly enforce a timeout
+        (the connection inactivity threshold)
         """
         event = None
         
-        while not event or not self.event.server.conn_inactive \
-                or time.time() - self.start < self.event.server.conn_inactive:
+        while not event and (not self.event.server.conn_inactive \
+                or time.time() - self.start < self.event.server.conn_inactive):
             if not server.alive.get() or not server.socket_event_function_name:
                 raise StopIteration()
             
@@ -160,7 +154,6 @@ class BindRequestHandler(BaseRequestHandler):
             except socket.error:
                 pass
             time.sleep(server.sleep)
-        server.alive.set(False) # kills future iterations of the server
         return event
 
 class ConnectRequestHandler(BaseRequestHandler):
@@ -173,7 +166,7 @@ class ConnectRequestHandler(BaseRequestHandler):
     that the SOCKS server will use DST.ADDR and DST.PORT, and the
     client-side source address and port in evaluating the CONNECT
     request.
-    """
+    """###################################################
 
     def __init__(self, *args, **kwargs):
         BaseRequestHandler.__init__(self, *args, **kwargs)
@@ -243,7 +236,7 @@ class PipeSocketsHandler(baseserver.eventhandler.EventHandler):
             s.settimeout(self.event.server.timeout)
         self.last = time.time()
     
-    def next(self):
+    def next(self):########################################################
         """pipe a chunk of data in one direction, then reverse the direction"""
         chunk = ""
         
@@ -302,7 +295,7 @@ class UDPAssociateRequestHandler(BaseRequestHandler):
     ###################integrate steppability
     ##########near-complete rewrite
     
-    def __call__(self):
+    def __call__(self):####################################################
         bound = False
         reply = header.ReplyHeader()
         server_sock = None
@@ -358,7 +351,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, **kwargs):#####################################
         baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
             **kwargs)
         self.address_string = baseserver.straddr.straddr(self.event.remote)
@@ -385,7 +378,7 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                     % self.address_string, traceback.format_exc())
             self.request_handler = None
     
-    def next(self):
+    def next(self):###########################################
         if self.event.server.alive.get() and self.request_handler:
             try:
                 return self.request_handler.next()

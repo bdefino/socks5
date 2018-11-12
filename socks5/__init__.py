@@ -32,8 +32,9 @@ when executed, runs a configurable SOCKS server (version 5 by default)
 
 if __name__ == "__main__":
     config = conf.Conf()
+    config.append(conf.Section())
     
     #mkconfig
     
     threaded = baseserver.threaded.Pipelining(nthreads = 1)
-    serve(threaded, **config)
+    serve(threaded, **config[0])
