@@ -36,5 +36,5 @@ if __name__ == "__main__":
     
     #mkconfig
     
-    threaded = baseserver.threaded.Pipelining(nthreads = 2)
+    threaded = baseserver.threaded.Pipelining(nthreads = 1)
     serve(threaded, **config[0])
