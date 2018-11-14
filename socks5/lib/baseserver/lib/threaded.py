@@ -110,7 +110,7 @@ class Threaded(Queue.Queue):
             pass
 
         if self.queue_output:
-            self.put(FuncInfo(func, output, *args, **kwargs))
+            Queue.Queue.put(self, FuncInfo(func, output, *args, **kwargs))
 
         if self.nthreads:
             self.nactive_threads.modify(lambda v: v - 1)
@@ -175,7 +175,7 @@ class Iterative(Threaded):
                 pass
 
             if self.queue_output:
-                self.put(funcinfo)
+                Queue.Queue.put(self, funcinfo)
 
 class Pipelining(Iterative):
     """
