@@ -74,17 +74,15 @@ class Threaded(Queue.Queue):
     when nthreads < 0, tasks are always executed in a new thread
 
     when queue_output evaluates to True, function call information is
-    queued into .output_queue as FuncInfo instances
+    queued into the current instance (a Queue) as FuncInfo instances
     """
 
     def __init__(self, nthreads = -1, queue_output = False):
+        Queue.Queue.__init__(self)
         self._allocation_lock = thread.allocate_lock()
         self.nactive_threads = Synchronized(0)
         self.nthreads = nthreads
-        self.output_queue = None
-
-        if queue_output:
-            self.output_queue = Queue.Queue()
+        self.queue_output = queue_output
 
     def execute(self, func, *args, **kwargs):
         """block until thread allocation is possible"""
@@ -111,11 +109,15 @@ class Threaded(Queue.Queue):
         except Exception as output:
             pass
 
-        if isinstance(self.output_queue, Queue.Queue):
-            self.output_queue.put(FuncInfo(func, output, *args, **kwargs))
+        if self.queue_output:
+            self.put(FuncInfo(func, output, *args, **kwargs))
 
         if self.nthreads:
             self.nactive_threads.modify(lambda v: v - 1)
+
+    def put(self, func, *args, **kwargs):
+        """synonym for Threaded.execute"""
+        self.execute(func, *args, **kwargs)
 
 class Iterative(Threaded):
     """
@@ -146,6 +148,10 @@ class Iterative(Threaded):
         """passively attempt to kill all the threads"""
         self.alive.set(False)
 
+    def put(self, func, *args, **kwargs):
+        """synonym for Iterative.execute"""
+        self.execute(func, *args, **kwargs)
+
     def _slave(self):
         """continuously execute tasks"""
         while 1:
@@ -168,8 +174,8 @@ class Iterative(Threaded):
             except Exception as funcinfo.output:
                 pass
 
-            if isinstance(self.output_queue, Queue.Queue):
-                self.output_queue.put(funcinfo)
+            if self.queue_output:
+                self.put(funcinfo)
 
 class Pipelining(Iterative):
     """
@@ -188,6 +194,10 @@ class Pipelining(Iterative):
             raise TypeError("iterable_task must be iterable")
         Iterative.execute(self, lambda: self._wrap_iterable_task_next(
             iterable_task))
+
+    def put(self, iterable_task):
+        """synonym for Pipelining.execute"""
+        self.execute(iterable_task)
 
     def _wrap_iterable_task_next(self, iterable_task):
         """execute then requeue if necessary"""
