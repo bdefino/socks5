@@ -48,9 +48,16 @@ class IterableTask:
         raise StopIteration()
 
 class Synchronized:
+    """a synchronized value"""
+    
     def __init__(self, value = None):
         self._lock = thread.allocate_lock()
         self.value = value
+
+    def execattr(self, attr, *args, **kwargs):
+        """execute an attribute of the value"""
+        with self._lock:
+            return getattr(self.value, attr)(*args, **kwargs)
 
     def get(self):
         with self._lock:
@@ -65,7 +72,7 @@ class Synchronized:
         with self._lock:
             self.value = value
 
-class Threaded(Queue.Queue):
+class Threaded:
     """
     allocates up to N additional threads for function calls (w/ blocking)
     or run function calls in the current thread if nthreads == 0
@@ -82,7 +89,10 @@ class Threaded(Queue.Queue):
         self._allocation_lock = thread.allocate_lock()
         self.nactive_threads = Synchronized(0)
         self.nthreads = nthreads
-        self.queue_output = queue_output
+        self._output_queue = None
+
+        if queue_output:
+            self.self._output_queue = Queue.Queue()
 
     def execute(self, func, *args, **kwargs):
         """block until thread allocation is possible"""
@@ -101,6 +111,12 @@ class Threaded(Queue.Queue):
             with self._allocation_lock: # block
                 self.nactive_threads.modify(lambda v: v + 1)
                 self._handle_thread(func, *args, **kwargs)
+
+    def get(self):
+        """get the next complete FuncInfo instance from the queue"""
+        if isinstance(self.queue, Queue.Queue):
+            return self.queue.get()
+        raise AttributeError("can't get from non-queueing instance")
     
     def _handle_thread(self, func, *args, **kwargs):
         """handle the current thread's execution"""
@@ -109,8 +125,8 @@ class Threaded(Queue.Queue):
         except Exception as output:
             pass
 
-        if self.queue_output:
-            Queue.Queue.put(self, FuncInfo(func, output, *args, **kwargs))
+        if isinstance(self._output_queue, Queue.Queue):
+            self._output_queue.put(FuncInfo(func, output, *args, **kwargs))
 
         if self.nthreads:
             self.nactive_threads.modify(lambda v: v - 1)
@@ -119,9 +135,9 @@ class Threaded(Queue.Queue):
         """synonym for Threaded.execute"""
         self.execute(func, *args, **kwargs)
 
-class Iterative(Threaded):
+class Slaving(Threaded):
     """
-    when nthreads > 0, distributes tasks between a set number of handlers
+    when nthreads > 0, distributes tasks between a set number of slaves
 
     otherwise, uses Threaded's default behavior
     """
@@ -149,7 +165,7 @@ class Iterative(Threaded):
         self.alive.set(False)
 
     def put(self, func, *args, **kwargs):
-        """synonym for Iterative.execute"""
+        """synonym for Slaving.execute"""
         self.execute(func, *args, **kwargs)
 
     def _slave(self):
@@ -174,10 +190,10 @@ class Iterative(Threaded):
             except Exception as funcinfo.output:
                 pass
 
-            if self.queue_output:
-                Queue.Queue.put(self, funcinfo)
+            if isinstance(self._output_queue, Queue.Queue):
+                self._output_queue.put(funcinfo)
 
-class Pipelining(Iterative):
+class Pipelining(Slaving):
     """
     pipeline iterable tasks;
     tasks must be iterable, preferably subclassing IterableTask
@@ -186,13 +202,13 @@ class Pipelining(Iterative):
     """
     
     def __init__(self, *args, **kwargs):
-        Iterative.__init__(self, *args, **kwargs)
+        Slaving.__init__(self, *args, **kwargs)
 
     def execute(self, iterable_task):
         """accepts iterable tasks instead of functions"""
         if not hasattr(iterable_task, "__iter__"):
             raise TypeError("iterable_task must be iterable")
-        Iterative.execute(self, lambda: self._wrap_iterable_task_next(
+        Slaving.execute(self, lambda: self._wrap_iterable_task_next(
             iterable_task))
 
     def put(self, iterable_task):
@@ -205,6 +221,6 @@ class Pipelining(Iterative):
             retval = iterable_task.next()
         except StopIteration:
             return
-        Iterative.execute(self, lambda: self._wrap_iterable_task_next(
+        Slaving.execute(self, lambda: self._wrap_iterable_task_next(
             iterable_task))
         return retval

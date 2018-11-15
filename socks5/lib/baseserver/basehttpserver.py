@@ -22,7 +22,6 @@ import traceback
 import baseserver
 import event
 import eventhandler
-from lib import threaded
 import straddr
 
 __doc__ = "a simple HTTP server"
