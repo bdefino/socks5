@@ -53,7 +53,7 @@ class Synchronized:
     def __init__(self, value = None):
         self._lock = thread.allocate_lock()
         self.value = value
-
+    
     def execattr(self, attr, *args, **kwargs):
         """execute an attribute of the value"""
         with self._lock:
@@ -63,6 +63,10 @@ class Synchronized:
         with self._lock:
             return self.value
 
+    def getattr(self, attr):
+        with self._lock:
+            return getattr(self.value, attr)
+
     def modify(self, func = lambda v: v):
         """modify the value via a function"""
         with self._lock:
@@ -71,6 +75,10 @@ class Synchronized:
     def set(self, value = None):
         with self._lock:
             self.value = value
+
+    def setattr(self, attr, value):
+        with self._lock:
+            return setattr(self.value, attr, value)
 
 class Threaded:
     """
