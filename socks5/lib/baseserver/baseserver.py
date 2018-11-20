@@ -101,6 +101,7 @@ class BaseServer(socket.socket):
             raise ValueError("socket_event_function_name is unusable")
         self.stderr = stderr
         self.stdout = stdout
+        self.threaded = None
     
     def __call__(self, max_events = -1, cleanup = True):
         if self.type == socket.SOCK_STREAM:
@@ -121,22 +122,25 @@ class BaseServer(socket.socket):
         finally:
             self.sprint("Closing", self.name,
                 "server on %s..." % address_string)
-            self.kill()
+            self.close(cleanup)
 
-            if cleanup:
-                self.cleanup()
+    def close(self, cleanup = True):
+        """
+        close the server gracefully
 
-    def cleanup(self):
-        """free up associated resources"""
-        self.shutdown(socket.SHUT_RDWR)
-        self.close()
+        if cleanup is True, kill any threaded component
+        and free up the socket resource
+        """
+        self.alive.set(False)
+        
+        if cleanup:
+            if self.threaded and hasattr(self.threaded, "kill_all"):
+                self.threaded.kill_all()
+            self.shutdown(socket.SHUT_RDWR)
+            self.close()
 
     def __iter__(self):
         return self
-
-    def kill(self):
-        """kill the server gracefully"""
-        self.alive.set(False)
 
     def next(self):
         """generate events"""
@@ -166,7 +170,7 @@ class BaseServer(socket.socket):
         """synchronized print to stderr"""
         self.sfprint(self.stderr, *args)
 
-    def thread(self, _threaded, maintain_callback = False):
+    def thread(self, threaded, maintain_callback = False):
         """
         add a threaded component to server
 
@@ -175,6 +179,7 @@ class BaseServer(socket.socket):
         the default behavior)
         """
         if maintain_callback: # executes the callback on the handler
-            self.callback = lambda h: _threaded.execute(self.callback, h)
+            self.callback = lambda h: threaded.execute(self.callback, h)
         else: # executes the handler
-            self.callback = _threaded.execute
+            self.callback = threaded.execute
+        self.threaded = threaded
