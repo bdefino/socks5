@@ -17,169 +17,192 @@ import socket
 import sys
 import thread
 import time
+import traceback
 
+import addr
 import event
-import eventhandler
 from lib import threaded
-import straddr
 
-__doc__ = "server core implementation"
+__doc__ = "an extensible socket server implementation"
 
-def best_address(port = 0):
-    """return the best default address"""
-    for addrinfo in socket.getaddrinfo(None, port):
-        return addrinfo[4]
-    return ("", port)
+class SocketConfig:
+    ADDRESS = addr.best()
+    BUFLEN = 65536
+    DETECTION_TIMEOUT = 0.001
+    GENERATING_ATTR = None
+    GENERATING_ATTR_ARGS = ()
+    GENERATING_ATTR_KWARGS = {}
+    SLEEP = 0.001
+    TIMEOUT = 0.001
+    TYPE = socket.SOCK_RAW
 
-class BaseServer(socket.socket):
+class TCPConfig(SocketConfig):
+    BACKLOG = 100
+    GENERATING_ATTR = "accept"
+    INACTIVE_TIMEOUT = None # guideline for handlers
+    SLEEP = 0.01
+    TYPE = socket.SOCK_STREAM
+
+class UDPConfig(SocketConfig):
+    GENERATING_ATTR = "recvfrom"
+    GENERATING_ATTR_ARGS = (SocketConfig.BUFLEN, )
+    TYPE = socket.SOCK_DGRAM
+
+class BaseServer:
     """
-    base class controlling a server socket
+    the base class for a socket server;
+    prints all relevant logging information to STDERR and STDOUT
     
-    by default, this processes events like so:
-        callback(event_handler_class(event_class(event)))
-    separating the callback and event handler allows support for both
-    functional and object-oriented styles, as well as providing easy
-    integration of parallelization
-
-    by default, the callback simply executes the handler
-
-    if the type is recognized (there are known default values),
-    unspecified arguments are filled in
+    this follows the event model: the server generates an event,
+    then delegates it to a handler;
+    if threaded, the server passes the handler
+    to the task scheduler (a threaded.Threaded instance),
+    which in turn executes the task
     """
 
-    DEFAULTS = {-1: {"backlog": 4096, "buflen": 512,
-            "event_class": event.DummyServerEvent,
-            "event_handler_class": eventhandler.DummyHandler,
-            "timeout": 1 / 1024.0},
-        socket.SOCK_DGRAM: {"backlog": 8192, "buflen": 512,
-            "event_class": event.DatagramEvent,
-            "event_handler_class": eventhandler.DatagramHandler,
-            "socket_event_function_name": "recvfrom"},
-        socket.SOCK_STREAM: {"backlog": 128, "buflen": 65536,
-            "conn_inactive": None, "conn_timeout": 1 / 1024.0,
-            "event_class": event.ConnectionEvent,
-            "event_handler_class": eventhandler.ConnectionHandler,
-            "socket_event_function_name": "accept"}}
-    
-    def __init__(self, type, callback = lambda h: h(), name = "base",
-            stderr = sys.stderr, stdout = sys.stdout, **kwargs):
-        if not "address" in kwargs: # must be recalculated
-            kwargs["address"] = best_address()
-        
-        for defaults in (BaseServer.DEFAULTS.get(type, {}), BaseServer.DEFAULTS[-1]):
-            for k in defaults: # fill in missing values
-                if not k in kwargs:
-                    kwargs[k] = defaults[k]
-        
-        if len(kwargs["address"]) == 2: # determine address family
-            kwargs["af"] = socket.AF_INET
-        elif len(kwargs["address"]) == 4:
-            kwargs["af"] = socket.AF_INET6
-        else:
+    ERROR_PREFIX = "[!]"
+    PREFIX = "[*]"
+
+    def __init__(self, event_class = None, handler_class = None,
+            sock_config = SocketConfig, stderr = sys.stderr, stdout = sys.stdout):
+        if not isinstance(sock_config(), SocketConfig):
+            raise TypeError("sock_config must inherit from SocketConfig")
+        af = socket.AF_INET
+
+        if len(sock_config.ADDRESS) == 4:
+            af = socket.AF_INET6
+        elif not len(sock_config.ADDRESS) == 2:
             raise ValueError("unknown address family")
-        socket.socket.__init__(self, kwargs["af"], type)
-
-        for k in kwargs:
-            setattr(self, k, kwargs[k])
+        self.alive = threaded.Synchronized(True)
+        self.event_class = event_class
+        self.handler_class = handler_class
+        self.sock_config = sock_config
+        self._print_lock = thread.allocate_lock()
         
-        if not hasattr(self, "alive"):
-            self.alive = threaded.Synchronized(True)
-        elif not isinstance(getattr(self, "alive"), threaded.Synchronized):
-            raise TypeError("conflicting types for self.alive")
-        self.callback = callback
-        self.name = name
-        self.sleep = 1.0 / self.backlog # optimal value
-        self.bind(self.address)
-        self.address = self.getsockname() # in case the OS chose for us
-        self.print_lock = thread.allocate_lock()
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
-        self.settimeout(self.timeout)
+        self._sock = socket.socket(af, sock_config.TYPE)
+        self._sock.bind(self.sock_config.ADDRESS)
         
-        if self.socket_event_function_name \
-                and not hasattr(self, self.socket_event_function_name):
-            raise ValueError("socket_event_function_name is unusable")
+        self.sock_config.ADDRESS = self._sock.getsockname() # update
+        
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        self._sock.settimeout(self.sock_config.TIMEOUT)
         self.stderr = stderr
         self.stdout = stdout
-        self.threaded = None
-    
-    def __call__(self, max_events = -1, cleanup = True):
-        if self.type == socket.SOCK_STREAM:
-            self.listen(self.backlog)
-        address_string = straddr.straddr(self.address)
-        self.sprint("Started", self.name, "server on", address_string)
+
+    def __call__(self):
+        """serve on the socket, then clean up"""
+        if self.sock_config.TYPE == socket.SOCK_STREAM:
+            backlog = 1
+            
+            if hasattr(self.sock_config, "BACKLOG"):
+                backlog = getattr(self.sock_config, "BACKLOG")
+            self._sock.listen(backlog)
+        self.sprint(self.PREFIX,
+            "Serving on %s" % addr.atos(self.sock_config.ADDRESS))
         
         try:
-            if max_events:
-                for event in self:
-                    max_events -= 1
-                    self.callback(self.event_handler_class(event))
+            while self.alive.get():
+                try:
+                    event = self.next()
+                except StopIteration:
+                    break
+                self.sprint(self.PREFIX, event)
 
-                    if not max_events:
-                        break
+                if self.handler_class:
+                    handler = self.handler_class(event)
+                    handle = lambda: handler()
+
+                    if hasattr(self, "_threaded"): # delegate scheduling
+                        handle = lambda: getattr(self, "_threaded").put(
+                            handler)
+
+                    try:
+                        handle()
+                    except Exception as e:
+                        self.sprinte(self.ERROR_PREFIX, event,
+                            traceback.format_exc(e))
         except KeyboardInterrupt:
             pass
         finally:
-            self.sprint("Closing", self.name,
-                "server on %s..." % address_string)
-            self.close(cleanup)
+            self.sprint(self.PREFIX,
+                "Closing server on %s" % addr.atos(self.sock_config.ADDRESS))
+            self.cleanup()
 
-    def close(self, cleanup = True):
-        """
-        close the server gracefully
-
-        if cleanup is True, kill any threaded component
-        and free up the socket resource
-        """
-        self.alive.set(False)
+    def cleanup(self):
+        """kill any worker threads and free up the socket resource"""
+        self.kill()
         
-        if cleanup:
-            if self.threaded and hasattr(self.threaded, "kill_all"):
-                self.threaded.kill_all()
-            self.shutdown(socket.SHUT_RDWR)
-            self.close()
-
+        if hasattr(self, "_threaded"):
+            getattr(self, "_threaded").kill_all()
+        
+        try:
+            self._sock.shutdown(socket.SHUT_RDWR)
+        except socket.error:
+            pass
+        self._sock.close()
+    
     def __iter__(self):
         return self
 
+    def kill(self):
+        """signal a graceful exit"""
+        self.alive.set(False)
+
     def next(self):
-        """generate events"""
-        while 1:
-            if not self.alive.get() or not self.socket_event_function_name:
-                raise StopIteration()
-            
+        """generate an event"""
+        if not self.sock_config.GENERATING_ATTR:
+            raise StopIteration()
+        
+        while self.alive.get():
             try:
-                return self.event_class(*getattr(self,
-                    self.socket_event_function_name)(), server = self)
-            except socket.error:
-                pass
-            time.sleep(self.sleep)
-    
+                _event = getattr(self._sock,
+                    self.sock_config.GENERATING_ATTR)(
+                        *self.sock_config.GENERATING_ATTR_ARGS,
+                        **self.sock_config.GENERATING_ATTR_KWARGS)
+            except socket.timeout:
+                time.sleep(self.sock_config.SLEEP)
+                continue
+            
+            if self.event_class:
+                if not isinstance(_event, tuple):
+                    _event = (_event, )
+                return self.event_class(*(list(_event) + [self]))
+            return _event
+        raise StopIteration()
+
     def sfprint(self, fp, *args):
-        """synchronized print to file"""
-        with self.print_lock:
-            for e in args:
-                print >> fp, e,
+        """synchronized print to a file"""
+        with self._print_lock:
+            for a in args:
+                print >> fp, a,
             print >> fp
-    
+
     def sprint(self, *args):
-        """synchronized print to stdout"""
+        """synchronized print to STDOUT"""
         self.sfprint(self.stdout, *args)
-    
+
     def sprinte(self, *args):
-        """synchronized print to stderr"""
+        """synchronized print to STDERR"""
         self.sfprint(self.stderr, *args)
 
-    def thread(self, threaded, maintain_callback = False):
-        """
-        add a threaded component to server
+    def thread(self, _threaded):
+        """thread future events"""
+        if _threaded:
+            setattr(self, "_threaded", _threaded)
 
-        by default, this replaces the callback entirely;
-        this can also maintain the callback (though that isn't desirable with
-        the default behavior)
-        """
-        if maintain_callback: # executes the callback on the handler
-            self.callback = lambda h: threaded.execute(self.callback, h)
-        else: # executes the handler
-            self.callback = threaded.execute
-        self.threaded = threaded
+def BaseTCPServer(handler_class = None, sock_config = TCPConfig, *args,
+        **kwargs):
+    """factory function for a TCP server"""
+    if not isinstance(sock_config(), TCPConfig):
+        raise TypeError("sock_config must inherit from TCPConfig")
+    return BaseServer(event.ConnectionEvent, handler_class, sock_config,
+        *args, **kwargs)
+
+def BaseUDPServer(handler_class = None, sock_config = UDPConfig, *args,
+        **kwargs):
+    """factory function for a UDP server"""
+    if not isinstance(sock_config(), UDPConfig):
+        raise TypeError("sock_config must inherit from UDPConfig")
+    return BaseServer(event.DatagramEvent, handler_class, sock_config,
+        *args, **kwargs)

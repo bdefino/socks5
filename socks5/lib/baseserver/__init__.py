@@ -15,20 +15,22 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 __package__ = __name__
 
+import addr
+from addr import atos, best, stoa
 import basehttpserver
+from basehttpserver import BaseHTTPServer, GETHandler, HEADHandler, \
+    http_bufsize, HTTPConnectionHandler, HTTPHeaders, HTTPRequest, \
+    HTTPRequestEvent, HTTPRequestHandler
 import baseserver
+from baseserver import BaseServer, SocketConfig, TCPConfig, UDPConfig
 import event
-import eventhandler
+from event import Event, ConnectionEvent, DatagramEvent, Handler, \
+    IterableHandler, ServerEvent
 from lib import threaded
-import straddr
 
 __doc__ = """
-a simple server framework
+a simple event-based server framework
 
-basic flow:
-    1. if there's a kill order, stop
-    2. listen for an event
-    3. create a handler for the event
-    4. pass the handler to the callback
-    5. repeat from step 1
+see BaseHTTPServer (basehttpserver.BaseHTTPServer)
+for an example implementation
 """

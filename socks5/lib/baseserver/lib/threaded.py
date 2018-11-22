@@ -13,49 +13,19 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = __name__
-
 import Queue
 import thread
-import time
 
 __doc__ = "threaded multitasking"
 
-class FuncInfo:
-    """information about a function call"""
-
-    def __init__(self, func, output, *args, **kwargs):
-        self.args = args
-        self.func = func
-        self.kwargs = kwargs
-        self.output = output
-
-class IterableTask:
-    """a task with discrete steps"""
-    
-    def __init__(self):
-        pass
-
-    def __call__(self):
-        for step in self:
-            pass
-
-    def __iter__(self):
-        return self
-
-    def next(self):
-        """perform the next step (usually without a return value)"""
-        raise StopIteration()
-
 class Synchronized:
-    """a synchronized value"""
-    
+    """synchronized access to an object"""
+
     def __init__(self, value = None):
         self._lock = thread.allocate_lock()
         self.value = value
-    
-    def execattr(self, attr, *args, **kwargs):
-        """execute an attribute of the value"""
+
+    def callattr(self, attr = "__call__", *args, **kwargs):
         with self._lock:
             return getattr(self.value, attr)(*args, **kwargs)
 
@@ -67,168 +37,199 @@ class Synchronized:
         with self._lock:
             return getattr(self.value, attr)
 
-    def modify(self, func = lambda v: v):
-        """modify the value via a function"""
-        with self._lock:
-            self.value = func(self.value)
-
     def set(self, value = None):
         with self._lock:
             self.value = value
 
-    def setattr(self, attr, value):
+    def setattr(self, attr, value = None):
         with self._lock:
-            return setattr(self.value, attr, value)
+            setattr(self.value, attr, value)
+
+    def transform(self, func):
+        with self._lock:
+            self.value = func(self.value)
+
+class Task:
+    """
+    an interface for a task
+
+    tasks don't have to subclass this,
+    as a task is simply something callable
+
+    note that __call__ accepts arguments
+    """
+    
+    def __init__(self):
+        pass
+
+    def __call__(self, *args, **kwargs):
+        """execute the task"""
+        pass
+
+class IterableTask(Task):
+    """
+    an interface for a multipart task
+
+    note that __call__ and next don't accept arguments
+    """
+
+    def __init__(self):
+        Task.__init__(self)
+
+    def __call__(self):
+        """execute the entire task"""
+        for part in self:
+            pass
+
+    def __iter__(self):
+        return self
+
+    def next(self):
+        """execute the next part of the task"""
+        raise StopIteration()
+
+class TaskInfo:
+    """information about a task"""
+
+    def __init__(self, task, output = None, *args, **kwargs):
+        self.args = args
+        self.kwargs = kwargs
+        self.output = output
+        self.task = task
 
 class Threaded:
     """
-    allocates up to N additional threads for function calls (w/ blocking)
-    or run function calls in the current thread if nthreads == 0
+    base class for a thread allocator
 
-    when nthreads == 0, tasks are executed in the calling thread
-    when nthreads < 0, tasks are always executed in a new thread
+    in order to preserve return values, this behaves like a queue:
+    both the get and put operations are supported
 
-    when queue_output evaluates to True, function call information is
-    queued into the current instance (a Queue) as FuncInfo instances
+    nthreads may be used to specify various behaviors:
+        nthreads < 0
+            -> a thread is spawned for each task
+        nthreads == 0
+            -> tasks are run in the current thread
+        nthreads > 0
+            -> up to nthreads tasks execute simultaneously
     """
 
     def __init__(self, nthreads = -1, queue_output = False):
-        Queue.Queue.__init__(self)
-        self._allocation_lock = thread.allocate_lock()
-        self.nactive_threads = Synchronized(0)
+        self.nactive = Synchronized(0) # the number of active threads
         self.nthreads = nthreads
-        self._output_queue = None
-
+        
         if queue_output:
-            self.self._output_queue = Queue.Queue()
-
-    def execute(self, func, *args, **kwargs):
-        """block until thread allocation is possible"""
-        if self.nthreads:
-            if self.nthreads > 0:
-                with self._allocation_lock: # block
-                    while 1:
-                        with self.nactive_threads._lock:
-                            if self.nactive_threads.value < self.nthreads:
-                                self.nactive_threads.value += 1
-                                break
-            # otherwise, self.nthreads < 0, so we don't block
-            thread.start_new_thread(self._handle_thread,
-                tuple([func] + list(args)), kwargs)
-        else:
-            with self._allocation_lock: # block
-                self.nactive_threads.modify(lambda v: v + 1)
-                self._handle_thread(func, *args, **kwargs)
+            self._output_queue = Queue.Queue()
 
     def get(self):
-        """get the next complete FuncInfo instance from the queue"""
-        if isinstance(self.queue, Queue.Queue):
-            return self.queue.get()
-        raise AttributeError("can't get from non-queueing instance")
-    
-    def _handle_thread(self, func, *args, **kwargs):
-        """handle the current thread's execution"""
+        """if queue_output was specified, return a TaskInfo instance"""
+        if hasattr(self, "_output_queue"):
+            return getattr(self, "_output_queue").get()
+        raise AttributeError("queue_output wasn't specified")
+
+    def _handle_task(self, task, *args, **kwargs):
+        """handle a task, and queue its info as needed"""
+        output = None
+
         try:
-            output = func(*args, **kwargs)
+            output = task(*args, **kwargs)
         except Exception as output:
             pass
+        
+        if hasattr(self, "_output_queue"):
+            getattr(self, "_output_queue").put(TaskInfo(task, output, *args,
+                **kwargs))
 
-        if isinstance(self._output_queue, Queue.Queue):
-            self._output_queue.put(FuncInfo(func, output, *args, **kwargs))
+        if not self.nthreads == 0: # inform the allocator
+            self.nactive.transform(lambda n: n - 1)
 
-        if self.nthreads:
-            self.nactive_threads.modify(lambda v: v - 1)
+    def put(self, task, *args, **kwargs):
+        """allocate space for a task, optionally with arguments"""
+        raise NotImplementedError()
 
-    def put(self, func, *args, **kwargs):
-        """synonym for Threaded.execute"""
-        self.execute(func, *args, **kwargs)
+class Blocking(Threaded):
+    """block until a task can be executed"""
+
+    def __init__(self, *args, **kwargs):
+        Threaded.__init__(self, *args, **kwargs)
+        self._allocation_lock = thread.allocate_lock()
+
+    def put(self, task, *args, **kwargs):
+        """block until the task can be executed"""
+        if self.nthreads == 0:
+            self._handle_task(task, *args, **kwargs)
+        else:
+            if self.nthreads > 0: # block
+                while 1: # allocate a thread
+                    try:
+                        self._allocation_lock.acquire()
+
+                        if self.nactive.get() < self.nthreads:
+                            self.nactive.transform(lambda n: n + 1)
+                            break # releases lock
+                    finally:
+                        self._allocation_lock.release()
+                    time.sleep(0.001) # since we're blocking, decrease usage
+            thread.start_new_thread(self._handle_task,
+                tuple([task] + list(args)), kwargs)
 
 class Slaving(Threaded):
     """
-    when nthreads > 0, distributes tasks between a set number of slaves
+    handle tasks among a finite (positive) number of slaves
 
-    otherwise, uses Threaded's default behavior
+    because threads are tough to kill,
+    the only option is a graceful exit (use kill_all)
     """
-    
-    def __init__(self, nthreads = 1, queue_output = False, sleep = 0.001):
-        Threaded.__init__(self, nthreads, queue_output)
+
+    def __init__(self, nthreads = 1, *args, **kwargs):
+        Threaded.__init__(self, nthreads, *args, **kwargs)
         self.alive = Synchronized(True)
         self._input_queue = Queue.Queue()
-        self.sleep = sleep
-        
-        if self.nthreads > 0:
-            for n in range(self.nthreads):
-                thread.start_new_thread(self._slave, ())
-                self.nactive_threads.modify(lambda v: v + 1)
 
-    def execute(self, func, *args, **kwargs):
-        """add the task to the queue"""
-        if self.nthreads > 0:
-            self._input_queue.put(FuncInfo(func, None, *args, **kwargs))
-        else: # use default behavior
-            Threaded.execute(self, func, *args, **kwargs)
-    
+        if self.nthreads <= 0:
+            raise ValueError("nthreads correlates to the number of slaves:" \
+                " it must be positive")
+        self.start() # starts the slaves
+
     def kill_all(self):
-        """passively attempt to kill all the threads"""
+        """attempt to gracefully kill the slaves"""
         self.alive.set(False)
 
-    def put(self, func, *args, **kwargs):
-        """synonym for Slaving.execute"""
-        self.execute(func, *args, **kwargs)
+    def put(self, task, *args, **kwargs):
+        """queue a task for execution"""
+        self._input_queue.put(TaskInfo(task, None, *args, **kwargs))
 
-    def _slave(self):
-        """continuously execute tasks"""
-        while 1:
-            if not self.alive.get():
-                break
-            funcinfo = None
-            
-            while not funcinfo:
-                if not self.alive.get():
-                    return
-                
-                try:
-                    funcinfo = self._input_queue.get()
-                except ValueError:
-                    time.sleep(self.sleep)
+    def _slave_loop(self):
+        """handle tasks as they appear"""
+        while self.alive.get():
+            taskinfo = self._input_queue.get()
+            self._handle_task(taskinfo.task, *taskinfo.args, **taskinfo.kwargs)
 
-            try:
-                funcinfo.output = funcinfo.func(*funcinfo.args,
-                    **funcinfo.kwargs)
-            except Exception as funcinfo.output:
-                pass
+    def start(self):
+        """set alive to True and start the slaves"""
+        self.alive.set(True)
+        i = 0
 
-            if isinstance(self._output_queue, Queue.Queue):
-                self._output_queue.put(funcinfo)
+        while i < self.nthreads: # start the slaves
+            thread.start_new_thread(self._slave_loop, ())
+            i += 1
 
 class Pipelining(Slaving):
-    """
-    pipeline iterable tasks;
-    tasks must be iterable, preferably subclassing IterableTask
-    
-    this class continually requeues unfinished tasks
-    """
-    
-    def __init__(self, *args, **kwargs):
-        Slaving.__init__(self, *args, **kwargs)
+    """pipeline iterable tasks among the slaves"""
 
-    def execute(self, iterable_task):
-        """accepts iterable tasks instead of functions"""
-        if not hasattr(iterable_task, "__iter__"):
-            raise TypeError("iterable_task must be iterable")
-        Slaving.execute(self, lambda: self._wrap_iterable_task_next(
-            iterable_task))
+    def __init__(self, nthreads = 1):
+        Slaving.__init__(self, nthreads)
+        self._handle_task = self._handle_iterable_task
+
+    def _handle_iterable_task(self, iterable_task):
+        """execute the task and enqueue any remaining steps"""
+        try:
+            iterable_task.next()
+            self._input_queue.put(TaskInfo(iterable_task, None))
+        except StopIteration:
+            pass
 
     def put(self, iterable_task):
-        """synonym for Pipelining.execute"""
-        self.execute(iterable_task)
-
-    def _wrap_iterable_task_next(self, iterable_task):
-        """execute then requeue if necessary"""
-        try:
-            retval = iterable_task.next()
-        except StopIteration:
-            return
-        Slaving.execute(self, lambda: self._wrap_iterable_task_next(
-            iterable_task))
-        return retval
+        """add an iterable task to the queue"""
+        if not hasattr(iterable_task, "__iter__"):
+            raise TypeError("iterable_task must be iterable")
+        self._input_queue.put(TaskInfo(iterable_task, None))

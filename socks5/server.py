@@ -38,7 +38,7 @@ def serve(threaded = None, *args, **kwargs):
         server.thread(threaded)
     server()
 
-class BaseRequestHandler(baseserver.eventhandler.EventHandler):
+class BaseRequestHandler(baseserver.EventHandler):
     pass
 
 class BindRequestHandler(BaseRequestHandler):
@@ -83,7 +83,7 @@ class BindRequestHandler(BaseRequestHandler):
         server_reply = header.ReplyHeader()
         
         try:
-            server = baseserver.baseserver.BaseServer(socket.SOCK_STREAM,
+            server = baseserver.BaseServer(socket.SOCK_STREAM,
                 lambda h: setattr(self, "target_event", h.event),
                 timeout = self.event.server.timeout)
             server.next = self.timing_out_server_next
@@ -137,7 +137,7 @@ class BindRequestHandler(BaseRequestHandler):
 
     def timing_out_server_next(self, server):
         """
-        forcibly overrides baseserver.baseserver.BaseServer.next
+        forcibly overrides baseserver.BaseServer.next
         in order to properly enforce a timeout
         (the connection inactivity threshold)
         """
@@ -216,21 +216,21 @@ class ConnectRequestHandler(BaseRequestHandler):
                 self.target_conn.close()
             raise StopIteration()
 
-class DatagramHandler(baseserver.eventhandler.DatagramHandler):
+class DatagramHandler(baseserver.Handler):
     def __call__(self):######################
         pass
 
-class PipeSocketsEvent(baseserver.event.ServerEvent):
+class PipeSocketsEvent(baseserver.ServerEvent):
     def __init__(self, a, b, server):
-        baseserver.event.ServerEvent.__init__(self, server)
+        baseserver.ServerEvent.__init__(self, server)
         self.a = a
         self.b = b
 
-class PipeSocketsHandler(baseserver.eventhandler.EventHandler):
+class PipeSocketsHandler(baseserver.Handler):
     """bidirectional socket relay"""
     
     def __init__(self, event):
-        baseserver.eventhandler.EventHandler.__init__(self, event)
+        baseserver.Handler.__init__(self, event)
         
         for s in (self.event.a, self.event.b):
             s.settimeout(self.event.server.timeout)
@@ -269,9 +269,9 @@ class PipeSocketsHandler(baseserver.eventhandler.EventHandler):
         self.event.a = self.event.b
         self.event.b = temp
 
-class RequestEvent(baseserver.event.ConnectionEvent):
+class RequestEvent(baseserver.ConnectionEvent):
     def __init__(self, request_header, *args, **kwargs):
-        baseserver.event.ConnectionEvent.__init__(self, *args, **kwargs)
+        baseserver.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request_header = request_header
 
 class UDPAssociateRequestHandler(BaseRequestHandler):
@@ -345,16 +345,15 @@ class UDPRequestHandler(BaseRequestHandler):
     def __call__(self):###########################
         raise NotImplementedError()
 
-class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
+class SOCKS5ConnectionHandler(baseserver.Handler):
     """handler explicitly for SOCKS5 control connections"""
     
     CMD_TO_HANDLER = {1: ConnectRequestHandler, 2: BindRequestHandler,
         3: UDPAssociateRequestHandler}
 
     def __init__(self, *args, **kwargs):#####################################
-        baseserver.eventhandler.ConnectionHandler.__init__(self, *args,
-            **kwargs)
-        self.address_string = baseserver.straddr.straddr(self.event.remote)
+        baseserver.Handler.__init__(self, *args, **kwargs)
+        self.address_string = baseserver.atos(self.event.remote)
         request_header = header.RequestHeader()
         self.event.server.sprint("Handling connection with",
             self.address_string)
@@ -390,8 +389,9 @@ class SOCKS5ConnectionHandler(baseserver.eventhandler.ConnectionHandler):
                         % self.address_string, traceback.format_exc())
         self.event.server.sprint("Closing connection with",
             self.address_string)
-        self.request_handler = None
-        baseserver.eventhandler.ConnectionHandler.next(self)
+        self.
+        self.event.conn.close()
+        baseserver.ConnectionHandler.next(self)
 
 class SOCKS5Server(baseserver.baseserver.BaseServer):
     """accepts optional authentication information"""

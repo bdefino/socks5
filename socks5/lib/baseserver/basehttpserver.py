@@ -19,10 +19,9 @@ import socket
 import sys
 import traceback
 
+import addr
 import baseserver
 import event
-import eventhandler
-import straddr
 
 __doc__ = "a simple HTTP server"
 
@@ -180,9 +179,9 @@ class HTTPRequestEvent(event.ConnectionEvent):
         event.ConnectionEvent.__init__(self, *args, **kwargs)
         self.request = request
 
-class HTTPRequestHandler(eventhandler.EventHandler):
+class HTTPRequestHandler(event.Handler):
     def __init__(self, *args, **kwargs):
-        eventhandler.EventHandler.__init__(self, *args, **kwargs)
+        event.Handler.__init__(self, *args, **kwargs)
         self.code = 200
         self.headers = HTTPHeaders()
         self.headers["connection"] = "close"
@@ -208,7 +207,7 @@ class GETHandler(HTTPRequestHandler):
         self.content_length = -1
         self.fp = None
         self.locked = False
-        self.path = self.event.server.resolver(self.event.request.resource)
+        self.path = self.event.server.resolve(self.event.request.resource)
         
         if os.path.exists(self.path) and not os.path.isdir(self.path):
             try:
@@ -264,7 +263,7 @@ class GETHandler(HTTPRequestHandler):
 
 class HEADHandler(HTTPRequestHandler):
     def next(self):
-        path = self.event.server.resolver(self.event.request.resource)
+        path = self.event.server.resolve(self.event.request.resource)
         
         if os.path.exists(path) and not os.path.isdir(path):
             try:
@@ -281,7 +280,7 @@ class HEADHandler(HTTPRequestHandler):
             self.message = "Not Found"
         HTTPRequestHandler.next(self) # respond/stop
 
-class HTTPConnectionHandler(eventhandler.EventHandler):
+class HTTPConnectionHandler(event.Handler):
     """
     parse an HTTP header and execute the appropriate handler
 
@@ -294,59 +293,61 @@ class HTTPConnectionHandler(eventhandler.EventHandler):
     METHOD_TO_HANDLER = {"GET": GETHandler, "HEAD": HEADHandler}
     
     def __init__(self, *args, **kwargs):
-        eventhandler.EventHandler.__init__(self, *args, **kwargs)
+        event.Handler.__init__(self, *args, **kwargs)
         request = HTTPRequest()
-        self.address_string = straddr.straddr(self.event.remote)
+        request_event = HTTPRequestEvent(request, self.event.conn,
+            self.event.remote, self.event.server)
+        self.address_string = addr.atos(self.event.remote)
         self.request_handler = None
         
         try:
-            self.event.conn.settimeout(self.event.server.timeout)
+            self.event.conn.settimeout(self.event.server.sock_config.TIMEOUT)
             request.fload(self.event.conn.makefile())
+            request.method = request.method.upper()
             
-            self.event.server.sprint("Handling", request.method, "request for",
-                request.resource, "from", self.address_string)
+            self.event.server.sprint(self.event.server.PREFIX, "Handling",
+                request.method, "request for",
+                self.event.server.resolve(request.resource), "from",
+                self.address_string)
             
-            self.request_handler = HTTPConnectionHandler.METHOD_TO_HANDLER[
-                request.method](HTTPRequestEvent(request, self.event.conn,
-                    self.event.remote, self.event.server))
-        except KeyError: # method not supported
-            _request_handler = HTTPRequestHandler(request, self.event.conn,
-                self.event.remote, self.event.server)
-            _request_handler.code = 501
-            _request_handler.status = "Not Supported"
-            
-            try:
-                _request_handler.respond()
-            except socket.error:
-                pass
-            self.request_handler = None
+            if not request.method in HTTPConnectionHandler.METHOD_TO_HANDLER:
+                # response will be sent on first call to next
+                self.request_handler.code = 501
+                self.request_handler.status = "Not Supported"
+            self.request_handler = HTTPConnectionHandler.METHOD_TO_HANDLER.get(
+                request.method, HTTPRequestHandler)(request_event).__iter__()
         except Exception:
-            self.event.server.sprinte(
-                "ERROR while handling connection with %s:\n"
+            self.event.server.sprinte(self.event.server.ERROR_PREFIX,
+                "Handling connection with %s:\n"
                     % self.address_string, traceback.format_exc())
             self.request_handler = None
     
     def next(self):
-        if self.event.server.alive.get() and self.request_handler:
+        if self.event.server.alive.get() and self.request_handler: # delegate
             try:
                 return self.request_handler.next()
             except StopIteration:
                 pass
             except Exception:
-                self.event.server.sfprint(sys.stderr,
-                    "ERROR while handling connection with %s:\n"
+                self.event.server.sprinte(self.event.server.ERROR_PREFIX,
+                    "Handling connection with %s:\n"
                         % self.address_string, traceback.format_exc())
-        self.event.server.sprint("Closing connection with",
-            self.address_string)
 
-        for f in (lambda: self.event.conn.shutdown(socket.SHUT_RDWR),
-                self.event.conn.close):
-            try:
-                f()
-            except socket.error:
-                pass
+        if self.request_handler:
+            self.event.server.sprint(self.event.server.PREFIX,
+                "Connection with", self.address_string, "resulted in status:",
+                self.request_handler.code,
+                "(%s)" % self.request_handler.message)
+        self.event.server.sprint(self.event.server.PREFIX,
+            "Closing connection with", self.address_string)
+        
+        try:
+            self.event.conn.shutdown(socket.SHUT_RDWR)
+        except socket.error:
+            pass
+        self.event.conn.close()
         self.request_handler = None
-        eventhandler.ConnectionHandler.next(self) # shutdown, close, and stop
+        raise StopIteration()
 
 class BaseHTTPServer(baseserver.BaseServer):
     """
@@ -355,18 +356,25 @@ class BaseHTTPServer(baseserver.BaseServer):
     regarding the resource resolver:
         isolate: keep resources within the root
         root: the content root directory
+
+    requests are parsed and processed in the handler,
+    leaving the event loop nice and (relatively) tight
     """
     
-    def __init__(self, event_handler_class = HTTPConnectionHandler,
-            isolate = True, name = "HTTP", root = os.getcwd(), **kwargs):
-        baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
-            event_handler_class = event_handler_class, name = name, **kwargs)
-        _resolver = lambda r: r
+    def __init__(self, handler_class = HTTPConnectionHandler, isolate = True,
+            root = os.getcwd(), sock_config = baseserver.TCPConfig(), *args,
+            **kwargs):
+        baseserver.BaseServer.__init__(self, event.ConnectionEvent,
+            handler_class, sock_config, *args, **kwargs)
+        resolve = lambda r: r
         
         if isolate:
-            _resolver = lambda r: os.path.normpath(r).lstrip('/')
-        self.resolver = lambda r: os.path.join(root, _resolver(r))
+            resolve = lambda r: os.path.normpath(r).lstrip('/')
+        self.resolve = lambda r: os.path.join(root, resolve(r))
         self.root = root
 
         if not os.path.exists(self.root):
             os.makedirs(self.root)
+
+if __name__ == "__main__":
+    BaseHTTPServer()()

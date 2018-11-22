@@ -13,37 +13,50 @@
 
 # You should have received a copy of the GNU General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
-__package__ = __name__
+import addr
+from lib import threaded
 
 __doc__ = "events"
 
+global Handler # alias
+
 class Event:
-    def __init__(self, parent = None):
-        self.parent = parent
+    def __init__(self):
+        pass
+
+    def __str__(self):
+        return ""
+
+class IterableHandler(threaded.IterableTask):
+    def __init__(self, event):
+        threaded.IterableTask.__init__(self)
+        self.event = event
+
+Handler = IterableHandler
 
 class ServerEvent(Event):
-    def __init__(self, server = None):
-        Event.__init__(self, server)
-        self.server = self.parent
+    def __init__(self, server):
+        Event.__init__(self)
+        self.server = server
+
+    def __str__(self):
+        return addr.atos(self.remote)
 
 class ConnectionEvent(ServerEvent):
-    def __init__(self, conn, remote, *args, **kwargs):
-        ServerEvent.__init__(self, *args, **kwargs)
+    def __init__(self, conn, remote, server):
+        ServerEvent.__init__(self, server)
         self.conn = conn
         self.remote = remote
 
+    def __str__(self):
+        return "Connection from %s" % ServerEvent.__str__(self)
+
 class DatagramEvent(ServerEvent):
-    def __init__(self, datagram, remote, *args, **kwargs):
-        ServerEvent.__init__(self, *args, **kwargs)
+    def __init__(self, datagram, remote, server):
+        ServerEvent.__init__(self, server)
         self.datagram = datagram
         self.remote = remote
 
-class DummyServerEvent(ServerEvent):
-    def __init__(self, event, remote, *args, **kwargs):
-        ServerEvent.__init__(self, *args, **kwargs)
-        self.event = event
-
-class ThreadedEvent(Event):
-    def __init__(self, *args, **kwargs):
-        Event.__init__(self, *args, **kwargs)
-        self.threaded = self.parent
+    def __str__(self):
+        return "%u-octet datagram from %s" % (len(self.datagram),
+            ServerEvent.__str__(self))
