@@ -15,6 +15,7 @@
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
 import Queue
 import thread
+import time
 
 __doc__ = "threaded multitasking"
 
