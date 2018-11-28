@@ -80,13 +80,15 @@ class BaseServer:
         self._print_lock = thread.allocate_lock()
         
         self._sock = socket.socket(af, sock_config.TYPE)
-        self._sock.bind(self.sock_config.ADDRESS)
-        
-        self.sock_config.ADDRESS = self._sock.getsockname() # update
+
+        # setsockopts BEFORE bind
         
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
         self._sock.settimeout(self.sock_config.TIMEOUT)
+        self._sock.bind(self.sock_config.ADDRESS)
+        
+        self.sock_config.ADDRESS = self._sock.getsockname() # update
         self.stderr = stderr
         self.stdout = stdout
 
