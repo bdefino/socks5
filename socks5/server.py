@@ -38,7 +38,7 @@ def serve(threaded = None, *args, **kwargs):
         server.thread(threaded)
     server()
 
-class BaseRequestHandler(baseserver.EventHandler):
+class BaseRequestHandler(baseserver.Handler):
     pass
 
 class BindRequestHandler(BaseRequestHandler):
@@ -345,6 +345,9 @@ class UDPRequestHandler(BaseRequestHandler):
     def __call__(self):###########################
         raise NotImplementedError()
 
+class SOCKS5Config(baseserver.TCPConfig):
+    ADDRESS = baseserver.best(1080)
+
 class SOCKS5ConnectionHandler(baseserver.Handler):
     """handler explicitly for SOCKS5 control connections"""
     
@@ -389,20 +392,18 @@ class SOCKS5ConnectionHandler(baseserver.Handler):
                         % self.address_string, traceback.format_exc())
         self.event.server.sprint("Closing connection with",
             self.address_string)
-        self.
+        ########################################self.
         self.event.conn.close()
         baseserver.ConnectionHandler.next(self)
 
 class SOCKS5Server(baseserver.baseserver.BaseServer):
     """accepts optional authentication information"""
     
-    def __init__(self, address = baseserver.baseserver.best_address(1080),
-            authenticators = (),
-            event_handler_class = SOCKS5ConnectionHandler, name = "SOCKS5",
-            udp_buflen = baseserver.baseserver.BaseServer.DEFAULTS[
-                socket.SOCK_DGRAM]["buflen"], **kwargs):
-        baseserver.baseserver.BaseServer.__init__(self, socket.SOCK_STREAM,
-            address = address, event_handler_class = event_handler_class,
+    def __init__(self, authenticators = (),
+            handler_class = SOCKS5ConnectionHandler, sock_config = SOCK5Config,
+            **kwargs):
+        baseserver.baseserver.BaseServer.__init__(self,
+            baseserver.ConnectionEvent, handler_class,
             name = name, **kwargs)
         self.authenticators = authenticators
         self.tcp_buflen = self.buflen

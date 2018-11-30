@@ -64,7 +64,8 @@ class BaseServer:
     PREFIX = "[*]"
 
     def __init__(self, event_class = None, handler_class = None,
-            sock_config = SocketConfig, stderr = sys.stderr, stdout = sys.stdout):
+            sock_config = SocketConfig, stderr = sys.stderr,
+            stdout = sys.stdout):
         if not isinstance(sock_config(), SocketConfig):
             raise TypeError("sock_config must inherit from SocketConfig")
         af = socket.AF_INET
